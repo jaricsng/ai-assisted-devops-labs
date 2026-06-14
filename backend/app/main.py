@@ -5,7 +5,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.database import engine, get_db
+from app.database import Base, engine, get_db
 from app.logging_config import configure_logging
 from app.middleware.logging import RequestLoggingMiddleware
 from app.middleware.metrics import MetricsMiddleware
@@ -63,6 +63,13 @@ async def ready(db: AsyncSession = Depends(get_db)):
 
 @app.on_event("startup")
 async def on_startup():
+    if settings.environment == "development":
+        # DEV-ONLY: create tables from ORM models so the app runs without Alembic.
+        # Module 4 replaces this with proper Alembic migrations before shipping to prod.
+        from app.models import Comment, Project, Task, User  # noqa: F401
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
     if settings.otel_enabled:
         # setup_telemetry mounts /metrics (Prometheus text format) and wires
         # FastAPIInstrumentor + SQLAlchemyInstrumentor to the OTel SDK.

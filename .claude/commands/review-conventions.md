@@ -29,7 +29,7 @@ Flag any violation:
 ### Python — Security
 
 - No hardcoded secrets, passwords, or API keys (even in tests — use `pytest.ini` or env vars)
-- Passwords must go through `passlib.hash` — never `hashlib` or plain storage
+- Passwords must be hashed with `bcrypt` (`bcrypt.hashpw` / `bcrypt.checkpw` in `auth_service.py`) — never `hashlib` or plain storage
 - JWT tokens must be validated with `python-jose` — never decoded without signature verification
 - No `eval()`, `exec()`, or `subprocess` calls that include user-supplied input
 - SQL queries must use SQLAlchemy ORM or parameterised statements — never f-strings in SQL
@@ -72,7 +72,7 @@ Flag any violation:
 
 - Any change to `app/models/` must have a corresponding new file in `alembic/versions/`
 - Alembic migration files must not be edited after creation — create a new migration to correct mistakes
-- No `Base.metadata.create_all()` calls in production code (only in tests/conftest.py)
+- No `Base.metadata.create_all()` calls in production code; acceptable in `tests/conftest.py` and in `app/main.py` under a `settings.environment == "development"` guard (the dev scaffold uses this in place of Alembic)
 
 ## Output Format
 

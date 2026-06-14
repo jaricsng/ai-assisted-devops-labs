@@ -84,6 +84,8 @@ Ask Claude Code:
 
 ### Test: User Registration and Login
 
+The app has no registration UI — registration is API-only (a deliberate scope decision for the lab). E2E tests call the API directly to create test users, then exercise the login UI. This is the recommended pattern.
+
 Create `frontend/e2e/auth.spec.ts`:
 
 ```typescript
@@ -91,35 +93,43 @@ import { test, expect } from "@playwright/test";
 
 test.describe("Authentication", () => {
   test("user can register and log in", async ({ page }) => {
-    const email = `test-${Date.now()}@example.com`;
+    // Use both Date.now() and Math.random() to avoid collisions in parallel runs
+    const email = `test-${Date.now()}-${Math.floor(Math.random() * 9999)}@example.com`;
+    const consoleErrors: string[] = [];
+    page.on("console", (msg) => { if (msg.type() === "error") consoleErrors.push(msg.text()); });
+    page.on("pageerror", (err) => consoleErrors.push(`PAGE ERROR: ${err.message}`));
 
-    // Register
+    // Register via API first (bcrypt is slow — do this before navigating)
+    const regRes = await page.request.post("http://localhost:8000/auth/register", {
+      data: { email, full_name: "E2E Test User", password: "Password1!" },
+    });
+    expect(regRes.status()).toBe(201);
+
     await page.goto("/login");
-    // Navigate to register — add a register link to LoginPage if needed
-    await page.click("text=Register");
-    await page.fill('[type="email"]', email);
-    await page.fill('[name="full_name"]', "Test User");
-    await page.fill('[type="password"]', "password123");
-    await page.click('[type="submit"]');
 
-    // Should redirect to login after registration
-    await expect(page).toHaveURL("/login");
+    // Fill the labeled inputs — id="email" / id="password"
+    await page.locator("#email").fill(email);
+    await page.locator("#password").fill("Password1!");
 
-    // Log in
-    await page.fill('[type="email"]', email);
-    await page.fill('[type="password"]', "password123");
-    await page.click('[type="submit"]');
+    // Click submit and wait for the API response before asserting
+    const [response] = await Promise.all([
+      page.waitForResponse((r) => r.url().includes("/auth/login") && r.request().method() === "POST"),
+      page.click('button[type="submit"]'),
+    ]);
 
-    // Should redirect to projects page
+    expect(response.status(), `Login API should return 200, errors: ${JSON.stringify(consoleErrors)}`).toBe(200);
+    const token = await page.evaluate(() => localStorage.getItem("access_token"));
+    expect(token, "Token should be in localStorage after successful login").not.toBeNull();
+
     await expect(page).toHaveURL("/projects");
     await expect(page.getByRole("heading", { name: "Projects" })).toBeVisible();
   });
 
   test("shows error on invalid credentials", async ({ page }) => {
     await page.goto("/login");
-    await page.fill('[type="email"]', "nobody@example.com");
-    await page.fill('[type="password"]', "wrongpassword");
-    await page.click('[type="submit"]');
+    await page.fill('input[type="email"]', "nobody@example.com");
+    await page.fill('input[type="password"]', "wrongpassword");
+    await page.click('button[type="submit"]');
     await expect(page.getByText("Invalid email or password")).toBeVisible();
   });
 });
@@ -133,6 +143,8 @@ npm run e2e
 npx playwright test --headed
 ```
 
+> **Why `page.request.post` for registration?** E2E tests should exercise what users actually do. Since the app provides no registration UI, the test uses the API directly to set up state. The test then validates the login UI, which is what a real user would do. This is the correct pattern — don't add a registration page just so tests can use it.
+
 ---
 
 ## Activities
@@ -143,14 +155,40 @@ The most important test: the full flow from login to a task status change.
 
 Ask Claude Code:
 > "Write a Playwright E2E test in frontend/e2e/task-flow.spec.ts that:
-> 1. Registers a unique user (use `Date.now()` in the email for uniqueness)
-> 2. Logs in
+> 1. Registers a unique user via API (`page.request.post`) and logs in via API to get a token
+> 2. Sets the token in localStorage with `page.evaluate`, then navigates to /projects
 > 3. Creates a project named 'E2E Test Project'
 > 4. Creates a task titled 'My First Task' in that project
 > 5. Clicks the '→ In Progress' button on the task card
 > 6. Asserts that the task appears in the IN_PROGRESS column
 > 7. Asserts that the task no longer appears in the TODO column
 > Use page.waitForResponse to wait for the PATCH API call to complete before asserting."
+
+The key pattern for setting up authenticated state without using the UI:
+```typescript
+async function loginAsNewUser(page: Page): Promise<string> {
+  const email = `e2e-${Date.now()}-${Math.floor(Math.random() * 9999)}@example.com`;
+
+  const regRes = await page.request.post("http://localhost:8000/auth/register", {
+    data: { email, full_name: "E2E User", password: "Password1!" },
+  });
+  expect(regRes.status()).toBe(201);
+
+  const tokenRes = await page.request.post("http://localhost:8000/auth/login", {
+    data: { email, password: "Password1!" },
+  });
+  const { access_token } = await tokenRes.json();
+
+  // Navigate to /login first to establish the origin, then set localStorage,
+  // then navigate to /projects. Going directly to /projects redirects to /login
+  // before localStorage can be set.
+  await page.goto("/login");
+  await page.evaluate((token: string) => localStorage.setItem("access_token", token), access_token);
+  await page.goto("/projects");
+
+  return access_token;
+}
+```
 
 ### 2. Use Page Object Model (POM) to reduce duplication
 

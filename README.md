@@ -45,7 +45,7 @@ docker compose --profile observability up
 
 ```bash
 # Backend — unit + integration tests with coverage
-cd backend && pip install -e ".[dev]" aiosqlite
+cd backend && pip install -e ".[dev]"
 pytest --cov=app --cov-report=term-missing
 
 # Frontend — component tests with coverage

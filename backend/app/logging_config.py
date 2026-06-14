@@ -29,10 +29,16 @@ def configure_logging(environment: str = "development") -> None:
             structlog.dev.ConsoleRenderer(colors=True),
         ]
 
+    logging.basicConfig(
+        format="%(message)s",
+        stream=sys.stdout,
+        level=logging.DEBUG,
+    )
+
     structlog.configure(
         processors=processors,
         wrapper_class=structlog.make_filtering_bound_logger(logging.DEBUG),
         context_class=dict,
-        logger_factory=structlog.PrintLoggerFactory(sys.stdout),
+        logger_factory=structlog.stdlib.LoggerFactory(),
         cache_logger_on_first_use=True,
     )

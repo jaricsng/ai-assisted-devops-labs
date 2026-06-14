@@ -40,7 +40,7 @@ Unit tests run without a database, a network, or Docker. They test pure Python l
 
 ```bash
 cd backend
-pip install -e ".[dev]" aiosqlite
+pip install -e ".[dev]"
 pytest tests/test_task_service.py tests/test_auth_service.py -v
 ```
 

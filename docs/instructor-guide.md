@@ -19,7 +19,7 @@ This is a self-paced, 12-module lab. Students build a three-tier Task Manager us
 |---------|-----------|---------|
 | `docker compose up` fails immediately | Docker Desktop not running | Check Docker status; restart Docker |
 | `SECRET_KEY` missing error | `.env` not created from `.env.example` | `cp .env.example .env` and set a real key |
-| pytest fails to import `aiosqlite` | Dev dependencies not installed | `pip install -e ".[dev]" aiosqlite` |
+| pytest fails to import `aiosqlite` | Dev dependencies not installed | `pip install -e ".[dev]"` (`aiosqlite` is included in `[dev]`) |
 | Pre-commit blocks every commit | Black auto-formats the file, student doesn't re-stage | After black runs, `git add` the file again |
 | CI fails on coverage | Student wrote feature code without tests | Show them `htmlcov/index.html` to find uncovered lines |
 | 422 on status transition in tests | Test doesn't follow the valid transition path | Walk through `VALID_TRANSITIONS` in `task.py` |

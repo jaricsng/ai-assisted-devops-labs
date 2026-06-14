@@ -4,19 +4,23 @@ import { test, expect } from "@playwright/test";
 async function loginAsNewUser(page: import("@playwright/test").Page): Promise<string> {
   const email = `e2e-${Date.now()}-${Math.floor(Math.random() * 9999)}@example.com`;
 
-  await page.request.post("http://localhost:8000/auth/register", {
-    data: { email, full_name: "E2E User", password: "password123" },
+  const regRes = await page.request.post("http://localhost:8000/auth/register", {
+    data: { email, full_name: "E2E User", password: "Password1!" },
   });
+  expect(regRes.status()).toBe(201);
 
   const tokenRes = await page.request.post("http://localhost:8000/auth/login", {
-    data: { email, password: "password123" },
+    data: { email, password: "Password1!" },
   });
   const { access_token } = await tokenRes.json();
 
-  // Set the token in localStorage so the React app treats us as logged in
-  await page.goto("/projects");
+  // Set the token in localStorage then navigate — goto /login first to establish
+  // the correct origin, then set localStorage, then navigate to /projects.
+  // (Navigating directly to /projects redirects to /login via React Router's
+  // <Navigate replace> before we can set localStorage, so reload lands on /login.)
+  await page.goto("/login");
   await page.evaluate((token: string) => localStorage.setItem("access_token", token), access_token);
-  await page.reload();
+  await page.goto("/projects");
 
   return access_token;
 }

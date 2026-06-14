@@ -54,7 +54,7 @@ For each major user flow, describe the data path and mark where it crosses a tru
 Login flow:
   Browser → [BOUNDARY] → POST /auth/login → auth_service.authenticate()
     → user_repository.get_by_email() → PostgreSQL
-    → passlib.verify(password, hash) → JWT issued
+    → bcrypt.checkpw(password, hash) → JWT issued
     ← Bearer token returned to browser
 
 Task status change:

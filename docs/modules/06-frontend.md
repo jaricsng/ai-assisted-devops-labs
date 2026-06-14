@@ -17,6 +17,35 @@ The frontend is a React 18 SPA built with Vite. Key decisions:
 | Tanstack Query | Handles loading states, caching, and refetching without manual `useState` |
 | Types from OpenAPI spec | `frontend/src/api/types.ts` stays in sync with the backend contract |
 | All API calls through `src/api/` | Components never call axios directly — easy to mock in tests |
+| Reactive auth state in `App.tsx` | `isAuthed` is a `useState` (initialized from localStorage), not a bare `localStorage.getItem()` call in the render — this ensures React 18's automatic batching applies both the state update and the location change in the same flush, preventing an immediate redirect back to `/login` after login |
+
+### Auth architecture
+
+`App.tsx` uses a `useState`-based auth state and passes a callback to `LoginPage`:
+
+```tsx
+export function App() {
+  const [isAuthed, setIsAuthed] = useState(() => !!localStorage.getItem("access_token"));
+  const handleLogin = useCallback(() => setIsAuthed(true), []);
+
+  return (
+    <Routes>
+      <Route path="/login" element={<LoginPage onLogin={handleLogin} />} />
+      <Route path="/projects" element={isAuthed ? <ProjectsPage /> : <Navigate to="/login" replace />} />
+      ...
+    </Routes>
+  );
+}
+```
+
+In `LoginPage`, after a successful API call:
+```tsx
+localStorage.setItem("access_token", data.access_token);
+onLogin?.();          // setIsAuthed(true) — batched with navigate()
+navigate("/projects");
+```
+
+`onLogin()` and `navigate("/projects")` are batched by React 18 into a single re-render, so `App` re-renders with `isAuthed = true` at the `/projects` location simultaneously. Without this, calling `navigate` alone triggers a re-render where `isAuthenticated()` reads localStorage but the result may not match the pending React state, causing an immediate redirect back to `/login`.
 
 ## Activities
 

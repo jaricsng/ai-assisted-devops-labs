@@ -3,7 +3,11 @@ import { useNavigate } from "react-router-dom";
 import apiClient from "../api/client";
 import type { Token } from "../api/types";
 
-export function LoginPage() {
+interface LoginPageProps {
+  onLogin?: () => void;
+}
+
+export function LoginPage({ onLogin }: LoginPageProps) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -15,6 +19,7 @@ export function LoginPage() {
     try {
       const { data } = await apiClient.post<Token>("/auth/login", { email, password });
       localStorage.setItem("access_token", data.access_token);
+      onLogin?.();
       navigate("/projects");
     } catch {
       setError("Invalid email or password.");
@@ -26,12 +31,12 @@ export function LoginPage() {
       <h1>Task Manager</h1>
       <form onSubmit={handleSubmit}>
         <div style={{ marginBottom: 12 }}>
-          <label>Email</label>
-          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required style={{ display: "block", width: "100%", marginTop: 4 }} />
+          <label htmlFor="email">Email</label>
+          <input id="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required style={{ display: "block", width: "100%", marginTop: 4 }} />
         </div>
         <div style={{ marginBottom: 12 }}>
-          <label>Password</label>
-          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required style={{ display: "block", width: "100%", marginTop: 4 }} />
+          <label htmlFor="password">Password</label>
+          <input id="password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required style={{ display: "block", width: "100%", marginTop: 4 }} />
         </div>
         {error && <p style={{ color: "red" }}>{error}</p>}
         <button type="submit">Log in</button>

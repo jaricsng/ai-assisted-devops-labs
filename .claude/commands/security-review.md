@@ -31,7 +31,7 @@ Work through each category. For each one: read the relevant source files, evalua
 ### A02 — Cryptographic Failures
 
 **What to check:**
-1. Password hashing: find all calls to `passlib` in `app/`. Verify bcrypt is used (not MD5, SHA1, SHA256 without salt, or plain storage).
+1. Password hashing: find all calls to `bcrypt` in `app/` (specifically `bcrypt.hashpw` / `bcrypt.checkpw` in `auth_service.py`). Verify bcrypt is used (not MD5, SHA1, SHA256 without salt, or plain storage).
 2. JWT secret: find where `SECRET_KEY` is used. Verify it comes from `settings.secret_key` (env var), not a hardcoded string.
 3. JWT algorithm: verify `algorithm` is `HS256` or stronger (not `none` — the "none" algorithm attack).
 4. Token expiry: find `access_token_expire_minutes` in config. Flag if it is `0` (never expires) or longer than 24 hours.

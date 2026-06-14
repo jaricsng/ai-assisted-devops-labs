@@ -120,7 +120,7 @@ git commit -m "your message"
 ### Security
 
 - Never commit real secrets — `.env` is gitignored; use `.env.example` for templates
-- Passwords hashed with bcrypt (via `passlib`) — never MD5, SHA1, or plain text
+- Passwords hashed with bcrypt directly (`bcrypt.hashpw` / `bcrypt.checkpw`) — never MD5, SHA1, or plain text
 - SQL queries use SQLAlchemy ORM — never f-string interpolation in SQL
 - JWT secret comes from environment variable only; no hardcoded default in production
 
