@@ -117,6 +117,7 @@ Work through the modules in order. Each has learning objectives, step-by-step in
 | [10](docs/modules/10-review-and-reflection.md) | Code Review & Reflection |
 | [11](docs/modules/11-load-testing.md) | Load Testing (Locust + k6 + Grafana correlation) |
 | [12](docs/modules/12-pen-testing.md) | Penetration Testing (OWASP ZAP + manual checks) |
+| [13](docs/modules/13-continuous-deployment.md) | Continuous Deployment (GHCR image publishing + Fly.io + Alembic migrations) |
 
 ---
 
@@ -132,7 +133,8 @@ task-manager/
 │       ├── check-secrets.md     check-dependencies.md  threat-model.md
 │       └── load-test.md         pen-test.md
 ├── .github/
-│   ├── workflows/ci.yml    # 4 parallel jobs: backend · frontend · security · docker-build
+│   ├── workflows/ci.yml        # 5 parallel jobs: backend · frontend · security · docker-build · smoke-test
+│   ├── workflows/publish.yml   # CD pipeline: build images → GHCR → Fly.io deploy → health check
 │   ├── pull_request_template.md
 │   └── ISSUE_TEMPLATE/
 ├── backend/

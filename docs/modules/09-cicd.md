@@ -180,13 +180,70 @@ This is shift-left security: **catching security issues at merge time rather tha
 
 ## Checkpoint
 
-- [ ] All four CI jobs run on every push (check Actions tab)
+- [ ] All five CI jobs run on every push (check Actions tab)
 - [ ] The `security` job reports bandit findings (check the Actions log)
 - [ ] You've intentionally broken coverage CI and then fixed it
 - [ ] You've seen the secret scan detect a pattern and understood why
 - [ ] Coverage summary comment appears on PRs (Activity 4)
-- [ ] Branch protection requires all four CI jobs on `main`
-- [ ] Commit: `ci: add coverage comment; understand security gate`
+- [ ] Branch protection requires all jobs on `main`
+- [ ] Dependency caching added — second run is visibly faster (Activity 7)
+- [ ] `docker-build` has `needs: [backend, frontend]` (Activity 8)
+- [ ] k6 smoke test runs on PRs to `main` (Activity 9)
+- [ ] Commit: `ci: add caching, job ordering, and k6 smoke test`
+
+### 7. Speed up CI with dependency caching
+
+Without caching, every CI run reinstalls all packages from scratch — adding 60–90 seconds to every pipeline run. GitHub Actions can cache the pip and npm caches between runs.
+
+The `frontend` job already uses `cache: "npm"` on `actions/setup-node`. Add caching to the `backend` job:
+
+Ask Claude Code:
+> "Add pip dependency caching to the `backend` job in `.github/workflows/ci.yml` using `actions/setup-python@v5`'s built-in cache support. Show the updated step."
+
+The `pip-cache-dir` is derived from the `pyproject.toml` hash — when dependencies change, the cache is invalidated automatically.
+
+After adding caching, push a branch twice and compare the run times in the Actions tab. The second run should be 60+ seconds faster.
+
+### 8. Add job dependency ordering with `needs:`
+
+The `docker-build` job verifies the image builds, but currently runs in parallel with the backend and frontend jobs. It's more useful to only run the Docker build after the tests pass — fail fast on test failures before spending time building images.
+
+Ask Claude Code:
+> "Add a `needs: [backend, frontend]` dependency to the `docker-build` job in `.github/workflows/ci.yml` so it only runs after both jobs pass. Show the complete updated job definition."
+
+After the change, push a failing test — the Docker build job will now be skipped (shown as greyed out in the Actions UI) because the `backend` job failed. This is clearer than showing it as failed.
+
+### 9. Add the k6 smoke test to CI
+
+A passing smoke test is a fast, meaningful signal that the deployed API handles real requests — not just that it started. Add a `smoke-test` job that runs after `docker-build`:
+
+Ask Claude Code:
+> "Add a `smoke-test` job to `.github/workflows/ci.yml` that: (1) starts the Docker Compose stack, (2) waits for the health check, (3) runs `k6 run load-tests/k6/smoke.js` using the Docker k6 image, (4) only runs on PRs to `main`. Use `needs: [docker-build]`."
+
+The Docker k6 command (no local install needed):
+```bash
+docker run --rm --network host -v $(pwd)/load-tests/k6:/scripts grafana/k6 run /scripts/smoke.js
+```
+
+This means any PR that breaks the full user journey (register → login → create project → create task) is caught before merging.
+
+### 10. Pipeline failure notifications
+
+By default, GitHub notifies the PR author when CI fails. For team-wide visibility, add a Slack or email notification on `main` branch failures:
+
+Ask Claude Code:
+> "Add a notification step to the `backend` job that posts a Slack message when the job fails on the `main` branch. Use the `slackapi/slack-github-action` action. Use a `SLACK_WEBHOOK_URL` repository secret. Only notify on failure, only on `main`."
+
+This is the pattern:
+```yaml
+- name: Notify Slack on failure
+  if: failure() && github.ref == 'refs/heads/main'
+  uses: slackapi/slack-github-action@v1
+  with:
+    payload: '{"text": "CI failed on main: ${{ github.workflow }} — ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"}'
+  env:
+    SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+```
 
 ## Extension: Add a Lint-on-Save Hook
 

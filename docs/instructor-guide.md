@@ -4,7 +4,7 @@
 
 This is a self-paced, 12-module lab. Students build a three-tier Task Manager using Claude Code at every step of the delivery lifecycle. The lab works for mixed skill levels — beginners will follow the instructions closely while advanced students should be encouraged to deviate, experiment, and extend.
 
-**Estimated time:** 25–50 hours depending on student background (Modules 11 and 12 add approximately 4–8 hours).
+**Estimated time:** 30–60 hours depending on student background (Modules 11, 12, and 13 add approximately 6–12 hours).
 
 ## Before the Lab Starts
 
@@ -23,6 +23,10 @@ This is a self-paced, 12-module lab. Students build a three-tier Task Manager us
 | Pre-commit blocks every commit | Black auto-formats the file, student doesn't re-stage | After black runs, `git add` the file again |
 | CI fails on coverage | Student wrote feature code without tests | Show them `htmlcov/index.html` to find uncovered lines |
 | 422 on status transition in tests | Test doesn't follow the valid transition path | Walk through `VALID_TRANSITIONS` in `task.py` |
+| `flyctl deploy` auth error in CI | `FLY_API_TOKEN` secret not set or expired | Re-run `flyctl auth token` and update the GitHub secret |
+| Frontend 404 on page refresh after deploy | nginx missing `try_files` directive | Add `try_files $uri $uri/ /index.html;` to nginx location block |
+| Migration fails during deploy | Backward-incompatible migration | Use expand/contract pattern (Module 13 Activity 6) |
+| GHCR push denied in CI | `packages: write` permission not set on the job | Add `permissions: packages: write` to the publish job |
 
 ## Assessment Grading Notes
 
@@ -69,6 +73,7 @@ Read `docs/reflection.md`. The rubric:
 6. **Observability** — covered in **Module 05b**: structured JSON logging, request IDs, `/ready` probe, `/metrics` endpoint, OpenTelemetry tracing (extension)
 7. **Load testing SLO enforcement in CI** — add the k6 smoke test as a CI step using Module 11 activity 6 instructions
 8. **Full ZAP active scan** — run `pen-tests/zap-scan.sh http://localhost:8000 full` against a disposable DB instance and add findings to the pen test report
+9. **Staging environment** — extend the CD pipeline with a staging environment that auto-deploys on every `main` merge; production requires an additional manual promotion step
 
 ## How to Extend the Lab
 
