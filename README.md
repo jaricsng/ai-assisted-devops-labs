@@ -87,6 +87,13 @@ These project skills are available as soon as you open Claude Code in this direc
 
 **Shift-left tip:** Run `/check-secrets` before your first commit, `/security-scan` after implementing auth (Module 5), and `/threat-model` when designing a new feature.
 
+### Performance & Security Testing
+
+| Skill | What it does |
+|-------|-------------|
+| `/load-test [smoke\|load\|spike\|locust]` | Run a k6 or Locust scenario, parse results, correlate with Prometheus + Jaeger |
+| `/pen-test [authentication\|access-control\|injection\|design]` | Structured pen test — automated checks + ZAP scan + OWASP findings report |
+
 ---
 
 ## Lab Modules
@@ -108,6 +115,8 @@ Work through the modules in order. Each has learning objectives, step-by-step in
 | [08](docs/modules/08-documentation.md) | Documentation |
 | [09](docs/modules/09-cicd.md) | CI/CD with GitHub Actions |
 | [10](docs/modules/10-review-and-reflection.md) | Code Review & Reflection |
+| [11](docs/modules/11-load-testing.md) | Load Testing (Locust + k6 + Grafana correlation) |
+| [12](docs/modules/12-pen-testing.md) | Penetration Testing (OWASP ZAP + manual checks) |
 
 ---
 
@@ -121,6 +130,7 @@ task-manager/
 │       ├── fix-python.md        fix-frontend.md      review-conventions.md
 │       ├── check-db.md          security-scan.md     security-review.md
 │       ├── check-secrets.md     check-dependencies.md  threat-model.md
+│       └── load-test.md         pen-test.md
 ├── .github/
 │   ├── workflows/ci.yml    # 4 parallel jobs: backend · frontend · security · docker-build
 │   ├── pull_request_template.md
@@ -151,6 +161,16 @@ task-manager/
 │   ├── diagrams.md         # UML diagrams in Mermaid (architecture, ER, sequence, class)
 │   ├── modules/            # Lab module guides (one file per module)
 │   └── reflection.md       # Student reflection template
+├── load-tests/
+│   ├── locustfile.py       # Locust scenarios: ReadHeavy (6), TaskWriter (3), AuthStress (1)
+│   └── k6/
+│       ├── smoke.js        # 1 VU, 60 s — verify full user journey before any load
+│       ├── load.js         # Ramp to 50 VUs — SLO gates: P95 < 500 ms, errors < 1%
+│       └── spike.js        # Burst to 200 VUs — verify recovery after spike
+├── pen-tests/
+│   ├── manual-checks.sh    # Automated OWASP A01–A07 curl checks (PASS/FAIL report)
+│   ├── zap-scan.sh         # Docker-based ZAP baseline and full active scan
+│   └── reports/            # ZAP HTML + JSON reports land here (gitignored)
 ├── .pre-commit-config.yaml # Hooks: detect-secrets, bandit, black, isort, ruff
 ├── CLAUDE.md               # Project context for Claude Code
 ├── CONTRIBUTING.md         # Branch strategy, commit conventions, PR process

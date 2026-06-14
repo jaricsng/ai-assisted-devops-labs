@@ -113,6 +113,12 @@ Breaking this boundary is a convention violation. Use `/review-conventions` to c
 /threat-model [feature]  — STRIDE threat model with prioritised mitigation backlog
 ```
 
+### Performance & Security Testing
+```
+/load-test [smoke|load|spike|locust]  — run k6 or Locust scenario, parse results, identify bottlenecks
+/pen-test [authentication|access-control|injection|design]  — structured pen test with OWASP findings
+```
+
 ## Environment Variables
 
 Copy `.env.example` to `.env` — never commit `.env`. The `detect-secrets` pre-commit hook will block any commit that contains credential patterns.

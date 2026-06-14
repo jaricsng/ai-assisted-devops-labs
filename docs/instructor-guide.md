@@ -2,9 +2,9 @@
 
 ## Lab Overview
 
-This is a self-paced, 10-module lab. Students build a three-tier Task Manager using Claude Code at every step of the delivery lifecycle. The lab works for mixed skill levels — beginners will follow the instructions closely while advanced students should be encouraged to deviate, experiment, and extend.
+This is a self-paced, 12-module lab. Students build a three-tier Task Manager using Claude Code at every step of the delivery lifecycle. The lab works for mixed skill levels — beginners will follow the instructions closely while advanced students should be encouraged to deviate, experiment, and extend.
 
-**Estimated time:** 20–40 hours depending on student background.
+**Estimated time:** 25–50 hours depending on student background (Modules 11 and 12 add approximately 4–8 hours).
 
 ## Before the Lab Starts
 
@@ -67,6 +67,8 @@ Read `docs/reflection.md`. The rubric:
 4. **Cloud deploy** — deploy to Render or Railway using the existing Dockerfile
 5. **E2E tests** — add Playwright tests that drive the React frontend against the real API
 6. **Observability** — covered in **Module 05b**: structured JSON logging, request IDs, `/ready` probe, `/metrics` endpoint, OpenTelemetry tracing (extension)
+7. **Load testing SLO enforcement in CI** — add the k6 smoke test as a CI step using Module 11 activity 6 instructions
+8. **Full ZAP active scan** — run `pen-tests/zap-scan.sh http://localhost:8000 full` against a disposable DB instance and add findings to the pen test report
 
 ## How to Extend the Lab
 
@@ -118,3 +120,24 @@ These custom skills are defined in the lab repo and are available the moment stu
 **Teaching tip — shift-left security:** Introduce `/check-secrets` in Module 3 (before the first real commit) and `/security-scan` in Module 5 (after auth is implemented). Run `/threat-model` in Module 1 as a design exercise before any code is written — this is the shift-left principle in action.
 
 **Teaching tip — peer review:** Have students run `/security-review` on their own PR before the peer reviewer does. Students who find and fix issues themselves demonstrate deeper understanding than those who wait for the reviewer.
+
+#### Performance & Security Testing Skills
+
+| Skill | Module | Purpose |
+|-------|--------|---------|
+| `/load-test [smoke\|load\|spike\|locust]` | 11 | Run k6 or Locust scenario; parse results; correlate with Prometheus/Jaeger |
+| `/pen-test [authentication\|access-control\|injection\|design]` | 12 | Automated pen test — manual checks + ZAP scan + OWASP findings report |
+
+**Teaching tip — Module 11 (Load Testing):** Encourage students to use `/load-test smoke` first as a sanity check — a failing smoke test means a broken API, not a performance problem. Then run `/load-test load` while Grafana is open so students can see the dashboard update in real time as VUs ramp up.
+
+**Teaching tip — Module 12 (Pen Testing):** Emphasise the authorization notice. Students must only test `http://localhost:8000`. The `/pen-test` skill runs automated checks and offers to run ZAP — but the most valuable learning comes from reading the source code to understand *why* a check passed or failed, not just reading the PASS/FAIL output.
+
+**Common Module 11 pitfall:** k6 not installed. Offer students the Docker alternative:
+```bash
+docker run --rm -i --network host grafana/k6 run - < load-tests/k6/smoke.js
+```
+
+**Common Module 12 pitfall:** ZAP Docker pull takes 5+ minutes on first run. Warn students to pull in advance:
+```bash
+docker pull ghcr.io/zaproxy/zaproxy:stable
+```
