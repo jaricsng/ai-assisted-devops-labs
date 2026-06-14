@@ -200,10 +200,16 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for branch strategy, commit conventions, 
 
 ## Assessment
 
+See [`docs/rubric.md`](docs/rubric.md) for the full grading rubric with 4-level performance descriptors.
+
 | Criterion | Weight |
 |-----------|--------|
-| Working app (all tiers run via `docker compose up`) | 30% |
-| GitHub repo quality (commits, branch strategy, PR template) | 20% |
-| Test coverage ≥ 70% (CI-enforced on both backend and frontend) | 20% |
-| Peer code review (substantive feedback given and received) | 15% |
-| Reflection report (`docs/reflection.md`, 400–600 words) | 15% |
+| Functional application (all tiers run; business logic enforced server-side) | 20% |
+| Code quality & architecture (layer boundaries, type safety, conventions) | 15% |
+| Testing (≥70% coverage on both tiers; meaningful negative-case tests) | 15% |
+| CI/CD pipeline (all jobs pass; GHCR publish; Fly.io deploy with health check) | 15% |
+| Security practices (OWASP checks pass; no secrets in git; pen test report) | 10% |
+| DevOps practices (git workflow, observability, load testing, ADRs) | 10% |
+| Documentation (README, OpenAPI spec, docstrings, ADRs) | 5% |
+| Peer collaboration & code review (substantive feedback given and received) | 5% |
+| Reflection on AI-assisted development (`docs/reflection.md`) | 5% |

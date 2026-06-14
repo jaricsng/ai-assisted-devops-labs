@@ -30,38 +30,28 @@ This is a self-paced, 12-module lab. Students build a three-tier Task Manager us
 
 ## Assessment Grading Notes
 
-### Working app (30%)
-Run `docker compose up` in their repo. Test:
-- Register and log in
-- Create a project
-- Create 3 tasks with different priorities
-- Move a task through TODO → IN_PROGRESS → IN_REVIEW → DONE
-- Add a comment to a task
-- Verify the 422 on invalid transition (e.g., TODO → DONE directly)
+The full grading rubric is at [`docs/rubric.md`](rubric.md). It defines 9 criteria with 4 performance levels each. The grading sheet at the bottom of that file provides a copy-pasteable scoring template.
 
-Full marks if all of the above work. Deduct 5% per broken feature.
+### Quick verification commands
 
-### GitHub repo quality (20%)
-Check:
-- `git log --oneline` — at least 10 commits, mostly Conventional Commits format
-- At least 2 feature branches visible in the git history (merged PRs)
-- PR template was used (check closed PRs)
-- Meaningful commit messages (not "fix stuff" or "update")
+```bash
+# Criterion 1 — functional application
+docker compose up -d && curl http://localhost:8000/health && curl http://localhost:5173
 
-### Test coverage (20%)
-CI artifact shows coverage report. Must be ≥70% on both backend and frontend. Students who hit exactly 70% by writing trivial tests that don't verify behaviour — check the test quality, not just the number.
+# Criterion 3 — test coverage
+cd backend && pytest --cov=app --cov-report=term-missing --cov-fail-under=70
+cd frontend && npm test -- --coverage
 
-### Peer code review (15%)
-Review the PR comments on GitHub. Full marks require:
-- ≥3 substantive comments given (not "LGTM" or "+1")
-- ≥1 response to received comments (engagement, not silence)
-- Evidence they ran `/code-review` (ask them in the reflection)
+# Criterion 5 — security checks
+./pen-tests/manual-checks.sh http://localhost:8000
+```
 
-### Reflection (15%)
-Read `docs/reflection.md`. The rubric:
-- **Full marks:** Includes a real example of disagreeing with Claude Code and explains the reasoning
-- **Partial:** Lists examples of Claude Code helping but doesn't engage critically
-- **Minimal:** Superficial ("Claude Code was helpful")
+### Common grading pitfalls
+
+- **Coverage number ≠ test quality.** A student can reach 70% by testing only the happy path. Check that negative cases exist (wrong password, forbidden access, invalid transition). If all tests are integration tests with no unit tests, note it in feedback.
+- **Layer boundary violations are subtle.** Use `/review-conventions` to surface them — it flags `HTTPException` in repositories and business logic in routers with specific file and line references.
+- **Reflection depth varies widely.** The Pass level requires specifics ("I used this prompt: ..."). Vague positivity ("Claude Code was very helpful") is a Fail for criterion 9 regardless of word count.
+- **Security: distinguish missing vs broken.** Rate limiting absent = informational finding (document in ADR). IDOR present (User B can read User A's data) = HIGH severity and a criterion 5 fail unless fixed.
 
 ## Extension Exercises (for advanced students)
 
