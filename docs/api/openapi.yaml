@@ -1,0 +1,329 @@
+openapi: "3.1.0"
+info:
+  title: Task Manager API
+  version: "0.1.0"
+  description: AI-Assisted DevOps Lab — three-tier task management API
+
+servers:
+  - url: http://localhost:8000
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    User:
+      type: object
+      properties:
+        id: { type: integer }
+        email: { type: string, format: email }
+        full_name: { type: string }
+        created_at: { type: string, format: date-time }
+      required: [id, email, full_name, created_at]
+
+    Project:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        description: { type: [string, "null"] }
+        owner_id: { type: integer }
+        created_at: { type: string, format: date-time }
+      required: [id, name, owner_id, created_at]
+
+    TaskStatus:
+      type: string
+      enum: [TODO, IN_PROGRESS, IN_REVIEW, DONE, CANCELLED]
+
+    TaskPriority:
+      type: string
+      enum: [LOW, MEDIUM, HIGH, URGENT]
+
+    Task:
+      type: object
+      properties:
+        id: { type: integer }
+        project_id: { type: integer }
+        title: { type: string }
+        description: { type: [string, "null"] }
+        status: { $ref: "#/components/schemas/TaskStatus" }
+        priority: { $ref: "#/components/schemas/TaskPriority" }
+        assignee_id: { type: [integer, "null"] }
+        due_date: { type: [string, "null"], format: date }
+        created_at: { type: string, format: date-time }
+      required: [id, project_id, title, status, priority, created_at]
+
+    Comment:
+      type: object
+      properties:
+        id: { type: integer }
+        task_id: { type: integer }
+        author_id: { type: integer }
+        body: { type: string }
+        created_at: { type: string, format: date-time }
+      required: [id, task_id, author_id, body, created_at]
+
+    Token:
+      type: object
+      properties:
+        access_token: { type: string }
+        token_type: { type: string, default: bearer }
+      required: [access_token]
+
+    Error:
+      type: object
+      properties:
+        detail: { type: string }
+      required: [detail]
+
+security:
+  - bearerAuth: []
+
+paths:
+  /health:
+    get:
+      tags: [health]
+      summary: Liveness probe
+      security: []
+      responses:
+        "200":
+          description: API is running
+
+  /auth/register:
+    post:
+      tags: [auth]
+      summary: Register a new user
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email: { type: string, format: email }
+                full_name: { type: string }
+                password: { type: string, minLength: 8 }
+              required: [email, full_name, password]
+      responses:
+        "201":
+          description: User created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "409":
+          description: Email already registered
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /auth/login:
+    post:
+      tags: [auth]
+      summary: Log in and receive a JWT
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email: { type: string, format: email }
+                password: { type: string }
+              required: [email, password]
+      responses:
+        "200":
+          description: Token issued
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Token" }
+        "401":
+          description: Invalid credentials
+
+  /projects:
+    get:
+      tags: [projects]
+      summary: List my projects
+      responses:
+        "200":
+          description: Array of projects
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Project" }
+    post:
+      tags: [projects]
+      summary: Create a project
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                description: { type: string }
+              required: [name]
+      responses:
+        "201":
+          description: Project created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Project" }
+
+  /projects/{project_id}:
+    parameters:
+      - name: project_id
+        in: path
+        required: true
+        schema: { type: integer }
+    get:
+      tags: [projects]
+      summary: Get a project
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Project" }
+        "404":
+          description: Not found
+    delete:
+      tags: [projects]
+      summary: Delete a project (cascades to tasks/comments)
+      responses:
+        "204":
+          description: Deleted
+
+  /projects/{project_id}/tasks:
+    parameters:
+      - name: project_id
+        in: path
+        required: true
+        schema: { type: integer }
+    get:
+      tags: [tasks]
+      summary: List tasks in a project
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Task" }
+    post:
+      tags: [tasks]
+      summary: Create a task
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title: { type: string }
+                description: { type: string }
+                priority: { $ref: "#/components/schemas/TaskPriority" }
+                assignee_id: { type: integer }
+                due_date: { type: string, format: date }
+              required: [title]
+      responses:
+        "201":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Task" }
+
+  /projects/{project_id}/tasks/{task_id}:
+    parameters:
+      - name: project_id
+        in: path
+        required: true
+        schema: { type: integer }
+      - name: task_id
+        in: path
+        required: true
+        schema: { type: integer }
+    get:
+      tags: [tasks]
+      summary: Get a task
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Task" }
+        "404":
+          description: Not found
+    patch:
+      tags: [tasks]
+      summary: Update a task (including status transitions)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title: { type: string }
+                description: { type: string }
+                status: { $ref: "#/components/schemas/TaskStatus" }
+                priority: { $ref: "#/components/schemas/TaskPriority" }
+                assignee_id: { type: integer }
+                due_date: { type: string, format: date }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Task" }
+        "422":
+          description: Invalid status transition
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+    delete:
+      tags: [tasks]
+      summary: Delete a task
+      responses:
+        "204":
+          description: Deleted
+
+  /projects/{project_id}/tasks/{task_id}/comments:
+    parameters:
+      - name: project_id
+        in: path
+        required: true
+        schema: { type: integer }
+      - name: task_id
+        in: path
+        required: true
+        schema: { type: integer }
+    get:
+      tags: [comments]
+      summary: List comments on a task
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Comment" }
+    post:
+      tags: [comments]
+      summary: Add a comment to a task
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                body: { type: string }
+              required: [body]
+      responses:
+        "201":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Comment" }

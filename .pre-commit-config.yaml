@@ -1,0 +1,55 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-json
+      - id: check-merge-conflict
+      - id: detect-private-key        # catches PEM private keys
+      - id: no-commit-to-branch       # prevent direct commits to main
+        args: ["--branch", "main"]
+
+  # ── Secrets detection ─────────────────────────────────────────────────────
+  # detect-secrets scans staged files for credential patterns (API keys,
+  # passwords, tokens). Run `detect-secrets scan > .secrets.baseline` once to
+  # create a baseline, then commit the baseline so known false-positives are
+  # remembered across the team.
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      - id: detect-secrets
+        args: ["--baseline", ".secrets.baseline"]
+        exclude: package-lock\.json
+
+  # ── Python SAST ───────────────────────────────────────────────────────────
+  # bandit runs on staged Python files and blocks commits containing
+  # medium-or-above security issues (SQL injection, hardcoded passwords, etc.)
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.7.10
+    hooks:
+      - id: bandit
+        files: ^backend/app/
+        args: ["-c", "backend/pyproject.toml", "-ll"]
+        # -ll = medium-and-above severity only (low is too noisy for pre-commit)
+
+  # ── Python formatting + linting ───────────────────────────────────────────
+  - repo: https://github.com/psf/black
+    rev: 24.10.0
+    hooks:
+      - id: black
+        files: ^backend/
+
+  - repo: https://github.com/PyCQA/isort
+    rev: 5.13.2
+    hooks:
+      - id: isort
+        files: ^backend/
+        args: ["--profile", "black"]
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff
+        files: ^backend/
