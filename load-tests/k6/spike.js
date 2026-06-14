@@ -35,7 +35,7 @@ export const options = {
 const BASE_URL = __ENV.BASE_URL || "http://localhost:8000";
 
 function uniqueEmail() {
-  return `spike_${Date.now()}_${Math.random().toString(36).slice(2, 8)}@k6.local`;
+  return `spike_${Date.now()}_${Math.random().toString(36).slice(2, 8)}@example.com`;
 }
 
 export default function () {

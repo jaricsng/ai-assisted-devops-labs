@@ -16,7 +16,7 @@ from locust import HttpUser, TaskSet, between, events, task
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _unique_email() -> str:
-    return f"user_{time.time_ns()}_{random.randint(1000, 9999)}@loadtest.local"
+    return f"user_{time.time_ns()}_{random.randint(1000, 9999)}@example.com"
 
 
 def _register_and_login(client) -> str | None:
@@ -108,7 +108,10 @@ class CreateAndManageTasks(TaskSet):
         if not self.token:
             self.interrupt()
         self.project_id = None
-        self.task_ids = []  # (task_id, current_status)
+        # Store (project_id, task_id, current_status) so PATCH/comment always
+        # use the project the task was created in — avoids 404 when project_id
+        # changes after create_project fires.
+        self.tasks_state = []
 
     @task(2)
     def create_project(self):
@@ -135,15 +138,15 @@ class CreateAndManageTasks(TaskSet):
             name="/projects/{id}/tasks [POST]",
         )
         if r.status_code == 201:
-            self.task_ids.append((r.json()["id"], "TODO"))
+            self.tasks_state.append((self.project_id, r.json()["id"], "TODO"))
 
     @task(6)
     def advance_task_status(self):
-        if not self.task_ids or not self.project_id:
+        if not self.tasks_state:
             return
-        # Pick a random in-progress task
-        idx = random.randrange(len(self.task_ids))
-        task_id, status = self.task_ids[idx]
+        # Pick a random task (carries its own project_id)
+        idx = random.randrange(len(self.tasks_state))
+        proj_id, task_id, status = self.tasks_state[idx]
 
         # Only advance along the valid path; skip terminal states
         next_status = {
@@ -156,21 +159,21 @@ class CreateAndManageTasks(TaskSet):
             return  # terminal state — nothing to do
 
         r = self.client.patch(
-            f"/projects/{self.project_id}/tasks/{task_id}",
+            f"/projects/{proj_id}/tasks/{task_id}",
             json={"status": next_status},
             headers=_auth_headers(self.token),
             name="/projects/{id}/tasks/{id} [PATCH]",
         )
         if r.status_code == 200:
-            self.task_ids[idx] = (task_id, next_status)
+            self.tasks_state[idx] = (proj_id, task_id, next_status)
 
     @task(3)
     def add_comment(self):
-        if not self.task_ids or not self.project_id:
+        if not self.tasks_state:
             return
-        task_id, _ = random.choice(self.task_ids)
+        proj_id, task_id, _ = random.choice(self.tasks_state)
         self.client.post(
-            f"/projects/{self.project_id}/tasks/{task_id}/comments",
+            f"/projects/{proj_id}/tasks/{task_id}/comments",
             json={"body": "Load test comment"},
             headers=_auth_headers(self.token),
             name="/tasks/{id}/comments [POST]",

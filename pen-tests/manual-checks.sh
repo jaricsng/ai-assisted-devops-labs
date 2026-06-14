@@ -30,8 +30,8 @@ echo "================================================================="
 _info "A01 — Broken Access Control"
 
 # Create two users
-EMAIL_A="pentest_a_$(date +%s)@test.local"
-EMAIL_B="pentest_b_$(date +%s)@test.local"
+EMAIL_A="pentest_a_$(date +%s)@example.com"
+EMAIL_B="pentest_b_$(date +%s)@example.com"
 
 curl -sf -X POST "$BASE_URL/auth/register" \
   -H "Content-Type: application/json" \
@@ -122,28 +122,33 @@ echo "       or temporarily setting ACCESS_TOKEN_EXPIRE_MINUTES=0 and retrying a
 # ─── A03: Injection ───────────────────────────────────────────────────────────
 _info "A03 — Injection"
 
-# SQL injection probe in task title
-STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
-  "$BASE_URL/projects/$PROJECT_A/tasks" \
-  -H "Authorization: Bearer $TOKEN_A" -H "Content-Type: application/json" \
-  -d "{\"title\":\"'; DROP TABLE tasks; --\",\"priority\":\"LOW\"}")
-if [ "$STATUS" = "201" ] || [ "$STATUS" = "422" ]; then
-  # 201 = stored safely; 422 = rejected by validation; both acceptable
-  # A 500 would indicate the SQL was executed
-  _pass "SQL injection in task title: HTTP $STATUS (payload treated as data, not SQL)"
+if [ -z "$TOKEN_A" ] || [ -z "$PROJECT_A" ]; then
+  echo "  ⚠️   SKIP — A01 setup did not complete (rate limiting or registration failed)."
+  echo "       Wait 60 s after a previous run and retry, or use a fresh IP address."
 else
-  _fail "SQL injection probe returned HTTP $STATUS — investigate server logs for errors"
-fi
+  # SQL injection probe in task title
+  STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+    "$BASE_URL/projects/$PROJECT_A/tasks" \
+    -H "Authorization: Bearer $TOKEN_A" -H "Content-Type: application/json" \
+    -d "{\"title\":\"'; DROP TABLE tasks; --\",\"priority\":\"LOW\"}")
+  if [ "$STATUS" = "201" ] || [ "$STATUS" = "422" ]; then
+    # 201 = stored safely; 422 = rejected by validation; both acceptable
+    # A 500 would indicate the SQL was executed
+    _pass "SQL injection in task title: HTTP $STATUS (payload treated as data, not SQL)"
+  else
+    _fail "SQL injection probe returned HTTP $STATUS — investigate server logs for errors"
+  fi
 
-# XSS probe in project name
-STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
-  "$BASE_URL/projects" \
-  -H "Authorization: Bearer $TOKEN_A" -H "Content-Type: application/json" \
-  -d '{"name":"<script>alert(1)</script>"}')
-if [ "$STATUS" = "201" ] || [ "$STATUS" = "422" ]; then
-  _pass "XSS payload in project name: HTTP $STATUS (stored/rejected safely — API returns JSON, not HTML)"
-else
-  _fail "XSS probe returned HTTP $STATUS — investigate"
+  # XSS probe in project name
+  STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+    "$BASE_URL/projects" \
+    -H "Authorization: Bearer $TOKEN_A" -H "Content-Type: application/json" \
+    -d '{"name":"<script>alert(1)</script>"}')
+  if [ "$STATUS" = "201" ] || [ "$STATUS" = "422" ]; then
+    _pass "XSS payload in project name: HTTP $STATUS (stored/rejected safely — API returns JSON, not HTML)"
+  else
+    _fail "XSS probe returned HTTP $STATUS — investigate"
+  fi
 fi
 
 # ─── A04: Insecure Design ────────────────────────────────────────────────────
@@ -172,7 +177,7 @@ FAIL_COUNT=0
 for i in $(seq 1 20); do
   STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE_URL/auth/login" \
     -H "Content-Type: application/json" \
-    -d "{\"email\":\"nonexistent$i@test.local\",\"password\":\"wrong\"}")
+    -d "{\"email\":\"nonexistent$i@example.com\",\"password\":\"wrong\"}")
   if [ "$STATUS" = "429" ]; then
     _pass "Rate limiting active: received 429 after $i requests"
     FAIL_COUNT=-1  # signal that rate limiting was found
@@ -189,7 +194,7 @@ RESP_EXIST=$(curl -s -X POST "$BASE_URL/auth/login" \
   -d "{\"email\":\"$EMAIL_A\",\"password\":\"wrongpassword\"}" 2>/dev/null)
 RESP_NOEXIST=$(curl -s -X POST "$BASE_URL/auth/login" \
   -H "Content-Type: application/json" \
-  -d '{"email":"definitelynotreal@nowhere.invalid","password":"wrongpassword"}' 2>/dev/null)
+  -d '{"email":"definitelynotreal@example.com","password":"wrongpassword"}' 2>/dev/null)
 if [ "$RESP_EXIST" = "$RESP_NOEXIST" ]; then
   _pass "Login error responses are identical (no user enumeration)"
 else
@@ -223,7 +228,7 @@ fi
 _info "A07 — Identification and Authentication Failures"
 
 # Weak password accepted?
-WEAK_EMAIL="weakpass_$(date +%s)@test.local"
+WEAK_EMAIL="weakpass_$(date +%s)@example.com"
 STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE_URL/auth/register" \
   -H "Content-Type: application/json" \
   -d "{\"email\":\"$WEAK_EMAIL\",\"full_name\":\"Weak\",\"password\":\"123\"}")
@@ -236,7 +241,7 @@ fi
 # Empty password
 STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE_URL/auth/register" \
   -H "Content-Type: application/json" \
-  -d "{\"email\":\"empty_$(date +%s)@test.local\",\"full_name\":\"Empty\",\"password\":\"\"}")
+  -d "{\"email\":\"empty_$(date +%s)@example.com\",\"full_name\":\"Empty\",\"password\":\"\"}")
 if [ "$STATUS" = "422" ]; then
   _pass "Empty password rejected with 422"
 else

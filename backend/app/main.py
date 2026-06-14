@@ -9,6 +9,7 @@ from app.database import Base, engine, get_db
 from app.logging_config import configure_logging
 from app.middleware.logging import RequestLoggingMiddleware
 from app.middleware.metrics import MetricsMiddleware
+from app.middleware.rate_limit import RateLimitMiddleware
 from app.routers import auth, projects, tasks
 from app.telemetry import setup_telemetry, shutdown_telemetry
 
@@ -24,8 +25,11 @@ app = FastAPI(
 # Middleware order matters: outer middleware wraps inner ones.
 # MetricsMiddleware runs first (outermost) so it captures total wall-clock time.
 # RequestLoggingMiddleware runs second so request_id is bound before any logging.
+# RateLimitMiddleware on /auth/login runs innermost (closest to the route handler)
+# so legitimate requests still get logged before the limit fires.
 app.add_middleware(MetricsMiddleware)
 app.add_middleware(RequestLoggingMiddleware)
+app.add_middleware(RateLimitMiddleware, path="/auth/login", max_requests=10, window_seconds=60)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173"],

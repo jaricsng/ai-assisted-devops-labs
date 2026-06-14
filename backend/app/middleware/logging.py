@@ -52,4 +52,5 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         )
 
         response.headers["X-Request-ID"] = request_id
+        response.headers["server"] = "task-manager"
         return response

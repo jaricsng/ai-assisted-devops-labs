@@ -22,7 +22,7 @@ export const options = {
 const BASE_URL = __ENV.BASE_URL || "http://localhost:8000";
 
 function uniqueEmail() {
-  return `smoke_${Date.now()}_${Math.floor(Math.random() * 9999)}@k6.local`;
+  return `smoke_${Date.now()}_${Math.floor(Math.random() * 9999)}@example.com`;
 }
 
 export default function () {

@@ -16,7 +16,17 @@ cp .env.example .env
 # Edit .env — set SECRET_KEY to: python3 -c "import secrets; print(secrets.token_hex(32))"
 
 docker compose up
+
+# Optional: load demo account + sample data
+docker compose exec api python seed.py
 ```
+
+### Demo account (after running seed.py)
+
+| Field | Value |
+|-------|-------|
+| Email | `demo@example.com` |
+| Password | `Demo1234!` |
 
 ### Core services
 
@@ -189,6 +199,16 @@ See [`docs/diagrams.md`](docs/diagrams.md) for all architecture diagrams in Merm
 - **Sequence** — status transition (happy path), 422 error flow, login flow
 - **Class** — domain models, services, repositories, telemetry
 - **ER** — full PostgreSQL schema with columns, types, and foreign keys
+
+---
+
+## Using the Application
+
+See [docs/user-guide.md](docs/user-guide.md) for the end-user guide: account creation, logging in, managing projects and tasks, the Kanban board workflow, status transitions, and direct API access via Swagger UI.
+
+## Operations
+
+See [docs/operations.md](docs/operations.md) for the full operations reference: start/stop/restart, individual service control, log tailing, database access, health checks, observability stack, and common troubleshooting steps.
 
 ---
 
