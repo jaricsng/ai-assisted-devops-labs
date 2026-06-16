@@ -50,9 +50,22 @@ Ask Claude Code the following questions and note the answers in your ADR or a co
 > "What HTTP status code should be returned when a task is moved to an invalid status?"
 > "Should pagination be cursor-based or offset-based for this app, given 10–1000 tasks per project?"
 
+## API Security Threat Checklist
+
+Before moving to implementation, answer these 5 questions about your spec. If any answer is "no" or "unsure", it's a design gap — fix it in the spec now, not in production later.
+
+1. **Authentication** — Are all write endpoints (POST/PATCH/DELETE) protected by a `security` requirement in the spec?
+2. **IDOR risk** — Does any endpoint return data owned by another user if the caller supplies a different resource ID?
+3. **Injection risk** — Does any path or query parameter flow directly into a database query or file path without validation?
+4. **Error consistency** — Do all 401/403/404 responses return the same shape, with no difference that would let an attacker enumerate users or resources?
+5. **Rate limiting** — Is any endpoint a high-value target (login, password reset, registration) that needs rate limiting?
+
+> These 5 questions are the foundation of your threat model. You will expand them into a full STRIDE analysis in Module 19.
+
 ## Checkpoint
 
 - [ ] You can explain every endpoint in the spec without help
 - [ ] `npx @redocly/cli lint docs/api/openapi.yaml` exits clean
 - [ ] You've added the filter query parameters to the spec for the task list endpoint
 - [ ] You've committed the updated spec before writing any implementation code
+- [ ] All 5 API security threat checklist questions answered — gaps documented as comments in the spec or in your ADR

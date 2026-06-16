@@ -12,16 +12,28 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
+_instance: "RateLimitMiddleware | None" = None
+
+
+def reset_for_testing() -> None:
+    """Clear all rate-limit buckets. Call from test fixtures to prevent state bleed."""
+    if _instance is not None:
+        _instance._buckets.clear()
+
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """Block requests to `path` that exceed `max_requests` within `window_seconds`."""
 
-    def __init__(self, app, *, path: str, max_requests: int = 5, window_seconds: int = 60):
+    def __init__(
+        self, app, *, path: str, max_requests: int = 5, window_seconds: int = 60
+    ):
+        global _instance
         super().__init__(app)
         self._path = path
         self._max = max_requests
         self._window = window_seconds
         self._buckets: dict[str, Deque[float]] = defaultdict(deque)
+        _instance = self
 
     def _client_ip(self, request: Request) -> str:
         forwarded = request.headers.get("x-forwarded-for")

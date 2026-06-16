@@ -157,11 +157,13 @@ Ask Claude Code:
 k6 run load-tests/k6/spike.js
 ```
 
-The spike test ramps to 200 VUs in 10 seconds, holds for 3 minutes, then drops back. Watch the Grafana dashboard for:
+The spike test ramps to 100 VUs in 10 seconds, holds for 3 minutes, then drops back. Watch the Grafana dashboard for:
 
 1. Does error rate spike above 5% during the peak?
 2. After the spike subsides, does P95 latency return to baseline within 30 seconds?
 3. Does the API remain healthy after the test, or does `docker compose logs api` show errors?
+
+> **Rate-limit pitfall:** The spike test uses a token pool pattern — 10 users are registered and logged in once during the k6 `setup()` phase (with 7 s sleep between logins to stay under the 10 req/min rate limit: 9×7 s = 63 s means login[0] exits the 60-second sliding window before login[9] fires), and all 100 VUs share those tokens via round-robin. This avoids the common mistake of calling `register → login` inside the per-iteration `default()` function: at 100 concurrent VUs that pattern exhausts the rate limit immediately and causes a high error rate on logins instead of exercising the API under real load.
 
 Ask Claude Code:
 > "The spike test shows P95 latency rising to 3 seconds during the peak but dropping to 200 ms after the spike ends. No 5xx errors were returned. Is this acceptable behaviour? What would an unrecoverable spike failure look like?"
@@ -172,10 +174,18 @@ SLOs (Service Level Objectives) are performance targets expressed as thresholds.
 
 ```javascript
 thresholds: {
-  http_req_failed:   ["rate<0.01"],   // <1% errors
-  http_req_duration: ["p(95)<500"],   // p95 < 500 ms
+  http_req_failed:            ["rate<0.01"],   // <1% error rate
+  http_req_duration:          ["p(95)<500"],   // p95 < 500 ms overall
+  "http_req_duration{name:list_tasks}":     ["p(95)<400"],  // indexed FK reads
+  "http_req_duration{name:list_projects}":  ["p(95)<400"],  // indexed owner_id reads
+  errors:                     ["rate<0.01"],
+  task_create_duration:       ["p(95)<600"],
+  status_transition_duration: ["p(95)<600"],  // 2 DB round-trips (GET + PATCH)
+  comment_duration:           ["p(95)<600"],  // FK insert + task existence check
 }
 ```
+
+> **Threshold calibration:** The per-operation thresholds (`list_tasks`, `status_transition_duration`) are calibrated for local Docker at 50 VUs where network round-trips add overhead. Cloud deployments will comfortably beat these numbers. If you hit a threshold violation, open Jaeger and compare the span duration — is the time in the API code or in a database query?
 
 When a threshold is breached, k6 exits with a non-zero code. You can run the smoke test in CI to catch regressions:
 

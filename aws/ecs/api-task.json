@@ -1,0 +1,55 @@
+{
+  "family": "task-manager-api",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "256",
+  "memory": "512",
+  "executionRoleArn": "arn:aws:iam::ACCOUNT_ID:role/ecsTaskExecutionRole",
+  "taskRoleArn": "arn:aws:iam::ACCOUNT_ID:role/taskManagerTaskRole",
+  "containerDefinitions": [
+    {
+      "name": "api",
+      "image": "ghcr.io/GITHUB_USERNAME/task-manager/api:IMAGE_TAG",
+      "portMappings": [
+        {
+          "containerPort": 8000,
+          "protocol": "tcp"
+        }
+      ],
+      "environment": [
+        { "name": "ENVIRONMENT",    "value": "production" },
+        { "name": "OTEL_ENABLED",   "value": "false" },
+        { "name": "OTLP_ENDPOINT",  "value": "http://otel-collector:4317" }
+      ],
+      "secrets": [
+        {
+          "name": "DATABASE_URL",
+          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:task-manager/database-url"
+        },
+        {
+          "name": "SECRET_KEY",
+          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:task-manager/secret-key"
+        },
+        {
+          "name": "CORS_ORIGINS",
+          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:task-manager/cors-origins"
+        }
+      ],
+      "healthCheck": {
+        "command": ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"],
+        "interval": 30,
+        "timeout": 5,
+        "retries": 3,
+        "startPeriod": 15
+      },
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/task-manager-api",
+          "awslogs-region": "REGION",
+          "awslogs-stream-prefix": "api"
+        }
+      }
+    }
+  ]
+}

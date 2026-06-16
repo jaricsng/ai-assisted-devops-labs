@@ -20,11 +20,14 @@ In this module you test your own running instance of the Task Manager applicatio
 
 ## Background: The Pen Test Lifecycle
 
-```
-1. Recon      — understand the attack surface (endpoints, auth model, data flows)
-2. Scan       — automated tool-based discovery of potential vulnerabilities
-3. Exploit    — manually verify which potential vulnerabilities are real
-4. Report     — document findings with severity, evidence, and remediation steps
+```mermaid
+flowchart LR
+    Recon["**1. Recon**\nUnderstand attack surface\n(endpoints, auth, data flows)"]
+    Scan["**2. Scan**\nAutomated discovery\n(OWASP ZAP, bandit)"]
+    Exploit["**3. Exploit**\nManually verify\nreal vulnerabilities"]
+    Report["**4. Report**\nDocument findings,\nseverity, remediation"]
+
+    Recon --> Scan --> Exploit --> Report
 ```
 
 This module follows that sequence for the Task Manager API.
@@ -71,7 +74,13 @@ For each endpoint, note:
 Ask Claude Code:
 > "Read backend/app/routers/ and produce a table of every endpoint showing: HTTP method, path, whether it requires authentication, and what data it reads or writes. Highlight any endpoints that write data but aren't protected."
 
-This table is your **attack surface map** — the foundation of the pen test.
+This table is your **attack surface map** — the foundation of the pen test. Key endpoints introduced in enterprise governance hardening:
+
+| Endpoint | Auth required | What it does |
+|----------|--------------|--------------|
+| `POST /auth/logout` | Yes | Revokes the current token's JTI |
+| `DELETE /auth/users/me` | Yes | Soft-deletes the authenticated user's account |
+| `GET /ready` | No | Readiness probe — tests DB connectivity |
 
 ### 2. Automated scan — OWASP ZAP baseline
 
@@ -144,7 +153,7 @@ curl -v http://localhost:8000/projects/$PROJECT_ID \
   -H "Authorization: Bearer $TOKEN_B"
 ```
 
-**Expected:** HTTP 403 or 404 — Bob cannot see Alice's project.
+**Expected:** HTTP 404 — Bob cannot see Alice's project. The implementation returns 404 (not 403) intentionally: returning 403 would confirm the resource exists, leaking information to an attacker. Always returning 404 for resources the caller doesn't own prevents enumeration.
 
 **Vulnerable result:** HTTP 200 — Bob can see Alice's data.
 
@@ -256,9 +265,9 @@ for i in $(seq 1 10); do
 done
 ```
 
-**Expected:** HTTP 429 (Too Many Requests) after N attempts.
+**Expected:** HTTP 429 (Too Many Requests) on the 11th attempt. The `RateLimitMiddleware` is configured with `max_requests=10, window_seconds=60` — the first 10 attempts are allowed (returning 401 for bad credentials), and the 11th triggers the rate limit.
 
-**Vulnerable result:** All 10 return HTTP 401 without throttling — brute force is unrestricted.
+**Vulnerable result:** All 11 return HTTP 401 without throttling — brute force is unrestricted.
 
 ### 7. Run the full automated manual check suite
 
@@ -272,6 +281,8 @@ chmod +x pen-tests/manual-checks.sh
 Review every FAIL result and either:
 - Fix the vulnerability in the source code
 - Accept the risk and document it in `docs/adr/` with a justification
+
+> **Automated unit test coverage:** Many of the checks in `manual-checks.sh` are also covered by automated pytest tests in `tests/test_security.py` and `tests/test_auth_integration.py`. This means the same security properties are verified at two levels: the manual script against the live API, and fast unit tests in CI without a running server. See Module 07 for the full test inventory.
 
 ### 8. Full active scan (optional — use with caution)
 
@@ -300,6 +311,37 @@ Create your report at `docs/pen-test-report.md`:
 
 Ask Claude Code:
 > "Based on the output from ./pen-tests/manual-checks.sh and the ZAP scan report, write a professional penetration test report for the Task Manager API. Include a CVSS score for each finding and a remediation priority (Critical/High/Medium/Low/Informational)."
+
+### 10. Automating ZAP in CI/CD (DevSecOps gate)
+
+Running ZAP manually works for a lab, but a mature DevSecOps pipeline runs a **ZAP baseline scan automatically on every staging deploy** so security regressions are caught before production.
+
+Add this step to `.github/workflows/publish.yml`, immediately after the `deploy-fly-staging` job:
+
+```yaml
+zap-baseline-scan:
+  needs: deploy-fly-staging
+  runs-on: ubuntu-latest
+  steps:
+    - name: ZAP baseline scan (staging)
+      uses: zaproxy/action-baseline@v0.12.0
+      with:
+        target: 'https://task-manager-api-staging.fly.dev'
+        fail_action: true      # exit non-zero on any MEDIUM+ alert
+        cmd_options: '-I'      # informational-only mode (remove to enforce)
+        issue_title: 'ZAP Baseline Scan — Staging'
+```
+
+**Tradeoffs:**
+
+| Mode | Duration | Payloads | Recommended for |
+|------|----------|----------|----------------|
+| Baseline (`-t <url>`) | 2–5 min | Passive only | Every staging deploy |
+| Full active scan | 10–30 min | Real attack payloads | Release branches; resets DB after |
+
+Use `cmd_options: ''` (remove `-I`) to hard-gate on MEDIUM+ findings. Use `-I` to record findings without blocking — useful while baselining a new application.
+
+> **Note:** The current `publish.yml` has `deploy-fly-staging` gated by `if: false`. Activate that job first (Module 16), then wire this ZAP step after it.
 
 ---
 
@@ -335,10 +377,14 @@ The `/pen-test` Claude Code skill guides you through a structured pen test sessi
 
 - [ ] ZAP baseline scan completed — HTML report in `pen-tests/reports/`
 - [ ] `./pen-tests/manual-checks.sh` executed — all FAIL items investigated
-- [ ] IDOR check: Bob cannot access Alice's projects or tasks
+- [ ] IDOR check: Bob cannot access Alice's projects, tasks, or comments (project + task + comment level)
 - [ ] JWT alg:none attack rejected with 401
 - [ ] SQL injection probe: no 500 response from the API
 - [ ] Business logic bypass: TODO→DONE returns 422 from the API (not just the frontend)
 - [ ] Rate limiting status documented (present or accepted risk noted in ADR)
+- [ ] Token revocation tested: `POST /auth/logout` → same token returns 401
+- [ ] GDPR deletion tested: `DELETE /auth/users/me` → login returns 401, token returns 401
+- [ ] All 8 security headers verified on every response: X-Frame-Options, X-Content-Type-Options, X-XSS-Protection, Strict-Transport-Security, Referrer-Policy, Content-Security-Policy, Cache-Control, Permissions-Policy
 - [ ] `docs/pen-test-report.md` committed with at least 3 findings
+- [ ] ZAP step location in `publish.yml` identified (or baseline scan added to the staging deploy job)
 - [ ] Commit: `security: add pen test report and fix [finding-name]`

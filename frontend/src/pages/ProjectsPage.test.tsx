@@ -15,12 +15,12 @@ vi.mock("../api/projects", () => ({
 const mockList = projectsApi.list as ReturnType<typeof vi.fn>;
 const mockCreate = projectsApi.create as ReturnType<typeof vi.fn>;
 
-function renderPage() {
+function renderPage(props: { onLogout?: () => void } = {}) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
       <MemoryRouter>
-        <ProjectsPage />
+        <ProjectsPage {...props} />
       </MemoryRouter>
     </QueryClientProvider>
   );
@@ -79,5 +79,22 @@ describe("ProjectsPage", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
     expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  it("shows Logout button and calls onLogout when clicked", async () => {
+    mockList.mockResolvedValue([]);
+    const onLogout = vi.fn();
+    renderPage({ onLogout });
+    await waitFor(() => screen.getByRole("button", { name: "Logout" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Logout" }));
+    expect(onLogout).toHaveBeenCalled();
+  });
+
+  it("does not show Logout button when onLogout is not provided", async () => {
+    mockList.mockResolvedValue([]);
+    renderPage();
+    await waitFor(() => screen.getByRole("button", { name: "Create" }));
+    expect(screen.queryByRole("button", { name: "Logout" })).not.toBeInTheDocument();
   });
 });

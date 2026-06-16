@@ -1,7 +1,11 @@
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { App } from "./App";
+
+vi.mock("./pages/ProjectsPage", () => ({
+  ProjectsPage: () => <div data-testid="projects-page">Projects</div>,
+}));
 
 function renderAt(path: string) {
   return render(
@@ -34,5 +38,12 @@ describe("App routing", () => {
     expect(screen.getByRole("heading", { name: "Task Manager" })).toBeInTheDocument();
     expect(screen.getByLabelText("Email")).toBeInTheDocument();
     expect(screen.getByLabelText("Password")).toBeInTheDocument();
+  });
+
+  it("renders projects page (not login) when access_token is present", () => {
+    localStorage.setItem("access_token", "valid-token");
+    renderAt("/projects");
+    expect(screen.getByTestId("projects-page")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Email")).not.toBeInTheDocument();
   });
 });

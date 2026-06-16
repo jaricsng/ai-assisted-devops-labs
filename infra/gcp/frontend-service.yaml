@@ -1,0 +1,48 @@
+apiVersion: run.googleapis.com/v1
+kind: Service
+metadata:
+  name: task-manager-frontend
+  labels:
+    cloud.googleapis.com/location: REGION
+  annotations:
+    run.googleapis.com/ingress: all
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/minScale: "1"
+        autoscaling.knative.dev/maxScale: "5"
+    spec:
+      serviceAccountName: task-manager-frontend@PROJECT_ID.iam.gserviceaccount.com
+      containers:
+        - image: ghcr.io/GITHUB_USERNAME/task-manager/frontend:IMAGE_TAG
+          ports:
+            - containerPort: 80
+          env:
+            # VITE_API_URL is baked into the nginx image at build time (see publish.yml build-args).
+            # This runtime env var is kept for documentation but has no effect on the compiled bundle.
+            - name: VITE_API_URL
+              value: https://task-manager-api-HASH-REGION.a.run.app
+          resources:
+            limits:
+              cpu: "1"
+              memory: 256Mi
+          startupProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 3
+            periodSeconds: 3
+            failureThreshold: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 0
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 0
+            periodSeconds: 10

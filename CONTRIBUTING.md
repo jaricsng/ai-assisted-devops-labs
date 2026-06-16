@@ -156,8 +156,14 @@ Use these skills to check and fix standards automatically. Type them in Claude C
    # Using the skill (recommended):
    /check-standards
 
-   # Or manually:
-   cd backend && black --check . && isort --check . && ruff check . && pytest --cov-fail-under=70
+   # Or manually (backend via Docker — guarantees Python 3.12):
+   docker run --rm \
+     --network task-manager_default \
+     -e DATABASE_URL="postgresql+asyncpg://taskuser:taskpass@db:5432/taskmanager" \
+     -e SECRET_KEY="test-secret-key-for-local-dev-only" \
+     -e ENVIRONMENT=test -e OTEL_ENABLED=false \
+     -v "$(pwd)/backend:/app" python:3.12-slim \
+     bash -c "pip install -e '.[dev]' -q && black --check . && isort --check . && ruff check . && pytest --cov-fail-under=70"
    cd frontend && npm run typecheck && npm run lint && npm test
    ```
 4. Run the security check before opening a PR to `main`:

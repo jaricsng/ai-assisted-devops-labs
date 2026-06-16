@@ -5,12 +5,18 @@ app = "task-manager-api"
 primary_region = "sin"
 
 [build]
-  image = "ghcr.io/GITHUB_USERNAME/task-manager/api:latest"
+  # Replace YOUR_GITHUB_USERNAME with your GitHub username.
+  # The CD workflow deploys by passing --image explicitly, so this field is used
+  # for `flyctl deploy` from your local machine only.
+  image = "ghcr.io/YOUR_GITHUB_USERNAME/task-manager/api:latest"
 
 [env]
   PORT = "8000"
   ENVIRONMENT = "production"
+  # Set OTEL_ENABLED="true" and add OTLP_ENDPOINT via `flyctl secrets set` once
+  # you have an OTLP-compatible collector (Grafana Cloud, Honeycomb, etc.).
   OTEL_ENABLED = "false"
+  # CORS_ORIGINS — set via: flyctl secrets set CORS_ORIGINS="https://your-frontend.fly.dev"
 
 [deploy]
   # Runs `alembic upgrade head` before traffic switches to the new version.

@@ -1,9 +1,11 @@
 from datetime import datetime
-from pydantic import BaseModel
+from typing import Annotated
+
+from pydantic import BaseModel, StringConstraints
 
 
 class CommentCreate(BaseModel):
-    body: str
+    body: Annotated[str, StringConstraints(min_length=1, max_length=5000)]
 
 
 class CommentRead(BaseModel):

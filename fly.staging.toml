@@ -1,0 +1,55 @@
+# fly.staging.toml — Task Manager API (staging)
+# Used by the deploy-fly-staging job in publish.yml (Module 16).
+# See docs/modules/16-multi-environment.md for setup instructions.
+#
+# Quick start:
+#   flyctl launch --name task-manager-staging --no-deploy --config fly.staging.toml
+#   flyctl secrets set SECRET_KEY="$(openssl rand -hex 32)" --app task-manager-staging
+#   flyctl secrets set CORS_ORIGINS="https://task-manager-staging-frontend.fly.dev" --app task-manager-staging
+
+app = "task-manager-staging"
+primary_region = "sin"   # Keep same region as production for realistic latency testing
+
+[build]
+  image = "ghcr.io/YOUR_GITHUB_USERNAME/task-manager/api:latest"
+
+[env]
+  PORT = "8000"
+  ENVIRONMENT = "staging"
+  OTEL_ENABLED = "false"
+
+[deploy]
+  release_command = "alembic upgrade head"
+
+[[services]]
+  internal_port = 8000
+  protocol = "tcp"
+  auto_stop_machines = true    # staging machines stop when idle to save cost
+  auto_start_machines = true
+  min_machines_running = 0     # 0 = allow full scale-to-zero in staging (not production)
+
+  [[services.ports]]
+    handlers = ["http"]
+    port = 80
+    force_https = true
+
+  [[services.ports]]
+    handlers = ["tls", "http"]
+    port = 443
+
+  [services.concurrency]
+    type = "connections"
+    hard_limit = 10
+    soft_limit = 8
+
+  [[services.http_checks]]
+    interval = "10s"
+    timeout = "5s"
+    grace_period = "60s"   # longer grace: staging may cold-start
+    method = "GET"
+    path = "/health"
+
+[[vm]]
+  memory = "256mb"
+  cpu_kind = "shared"
+  cpus = 1

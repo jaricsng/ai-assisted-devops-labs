@@ -41,6 +41,17 @@ curl -sf -X POST "$BASE_URL/auth/register" \
   -H "Content-Type: application/json" \
   -d "{\"email\":\"$EMAIL_B\",\"full_name\":\"User B\",\"password\":\"PenTest123!\"}" > /dev/null
 
+# Register GDPR test user here (before the rate-limit test) so the login
+# does not land inside the throttled window used by the rate-limit check below.
+GDPR_EMAIL="gdpr_test_$(date +%s)@example.com"
+curl -sf -X POST "$BASE_URL/auth/register" \
+  -H "Content-Type: application/json" \
+  -d "{\"email\":\"$GDPR_EMAIL\",\"full_name\":\"GDPR Test\",\"password\":\"GdprTest1!\"}" > /dev/null
+GDPR_TOKEN=$(curl -sf -X POST "$BASE_URL/auth/login" \
+  -H "Content-Type: application/json" \
+  -d "{\"email\":\"$GDPR_EMAIL\",\"password\":\"GdprTest1!\"}" \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])" 2>/dev/null)
+
 TOKEN_A=$(curl -sf -X POST "$BASE_URL/auth/login" \
   -H "Content-Type: application/json" \
   -d "{\"email\":\"$EMAIL_A\",\"password\":\"PenTest123!\"}" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])" 2>/dev/null)
@@ -54,7 +65,7 @@ PROJECT_A=$(curl -sf -X POST "$BASE_URL/projects" \
   -H "Authorization: Bearer $TOKEN_A" -H "Content-Type: application/json" \
   -d '{"name":"User A Private Project"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])" 2>/dev/null)
 
-# IDOR check: User B tries to access User A's project
+# IDOR check: User B tries to read User A's project
 if [ -n "$PROJECT_A" ]; then
   STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
     -H "Authorization: Bearer $TOKEN_B" \
@@ -66,10 +77,46 @@ if [ -n "$PROJECT_A" ]; then
   fi
 fi
 
+# IDOR: User B tries to delete User A's project
+if [ -n "$PROJECT_A" ]; then
+  STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
+    -H "Authorization: Bearer $TOKEN_B" \
+    "$BASE_URL/projects/$PROJECT_A")
+  if [ "$STATUS" = "403" ] || [ "$STATUS" = "404" ]; then
+    _pass "IDOR: User B cannot delete User A's project (HTTP $STATUS)"
+  else
+    _fail "IDOR: User B received HTTP $STATUS when deleting User A's project — unauthorized deletion"
+  fi
+fi
+
 # User A creates a task
 TASK_A=$(curl -sf -X POST "$BASE_URL/projects/$PROJECT_A/tasks" \
   -H "Authorization: Bearer $TOKEN_A" -H "Content-Type: application/json" \
   -d '{"title":"Secret Task","priority":"HIGH"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])" 2>/dev/null)
+
+# IDOR: User B tries to list User A's tasks
+if [ -n "$PROJECT_A" ]; then
+  STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+    -H "Authorization: Bearer $TOKEN_B" \
+    "$BASE_URL/projects/$PROJECT_A/tasks")
+  if [ "$STATUS" = "403" ] || [ "$STATUS" = "404" ]; then
+    _pass "IDOR: User B cannot list tasks in User A's project (HTTP $STATUS)"
+  else
+    _fail "IDOR: User B received HTTP $STATUS when listing User A's tasks — task enumeration possible"
+  fi
+fi
+
+# IDOR: User B tries to read User A's task
+if [ -n "$TASK_A" ]; then
+  STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+    -H "Authorization: Bearer $TOKEN_B" \
+    "$BASE_URL/projects/$PROJECT_A/tasks/$TASK_A")
+  if [ "$STATUS" = "403" ] || [ "$STATUS" = "404" ]; then
+    _pass "IDOR: User B cannot read User A's task (HTTP $STATUS)"
+  else
+    _fail "IDOR: User B received HTTP $STATUS when reading User A's task — data leak"
+  fi
+fi
 
 # IDOR: User B tries to update User A's task
 if [ -n "$TASK_A" ]; then
@@ -81,6 +128,43 @@ if [ -n "$TASK_A" ]; then
     _pass "IDOR: User B cannot modify User A's task (HTTP $STATUS)"
   else
     _fail "IDOR: User B received HTTP $STATUS when modifying User A's task — privilege escalation"
+  fi
+fi
+
+# IDOR: User B tries to delete User A's task
+if [ -n "$TASK_A" ]; then
+  STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
+    "$BASE_URL/projects/$PROJECT_A/tasks/$TASK_A" \
+    -H "Authorization: Bearer $TOKEN_B")
+  if [ "$STATUS" = "403" ] || [ "$STATUS" = "404" ]; then
+    _pass "IDOR: User B cannot delete User A's task (HTTP $STATUS)"
+  else
+    _fail "IDOR: User B received HTTP $STATUS when deleting User A's task — unauthorized deletion"
+  fi
+fi
+
+# IDOR: User B tries to list comments on User A's task
+if [ -n "$TASK_A" ]; then
+  STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+    -H "Authorization: Bearer $TOKEN_B" \
+    "$BASE_URL/projects/$PROJECT_A/tasks/$TASK_A/comments")
+  if [ "$STATUS" = "403" ] || [ "$STATUS" = "404" ]; then
+    _pass "IDOR: User B cannot list comments on User A's task (HTTP $STATUS)"
+  else
+    _fail "IDOR: User B received HTTP $STATUS when listing User A's comments — comment enumeration possible"
+  fi
+fi
+
+# IDOR: User B tries to comment on User A's task
+if [ -n "$TASK_A" ]; then
+  STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+    "$BASE_URL/projects/$PROJECT_A/tasks/$TASK_A/comments" \
+    -H "Authorization: Bearer $TOKEN_B" -H "Content-Type: application/json" \
+    -d '{"body":"IDOR comment attempt"}')
+  if [ "$STATUS" = "403" ] || [ "$STATUS" = "404" ]; then
+    _pass "IDOR: User B cannot add comment to User A's task (HTTP $STATUS)"
+  else
+    _fail "IDOR: User B received HTTP $STATUS when commenting on User A's task — cross-user write"
   fi
 fi
 
@@ -171,6 +255,25 @@ if [ -n "$TASK_B" ]; then
   fi
 fi
 
+# Terminal state irreversibility: cancel TASK_B, then try to reopen it
+if [ -n "$TASK_B" ]; then
+  # First cancel the task (TODO → CANCELLED is a valid transition)
+  curl -s -o /dev/null -X PATCH \
+    "$BASE_URL/projects/$PROJECT_A/tasks/$TASK_B" \
+    -H "Authorization: Bearer $TOKEN_A" -H "Content-Type: application/json" \
+    -d '{"status":"CANCELLED"}'
+  # Now try to escape the terminal state (CANCELLED → IN_PROGRESS must be rejected)
+  STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X PATCH \
+    "$BASE_URL/projects/$PROJECT_A/tasks/$TASK_B" \
+    -H "Authorization: Bearer $TOKEN_A" -H "Content-Type: application/json" \
+    -d '{"status":"IN_PROGRESS"}')
+  if [ "$STATUS" = "422" ]; then
+    _pass "Terminal state CANCELLED is irreversible: CANCELLED→IN_PROGRESS rejected with 422"
+  else
+    _fail "Terminal state bypass: CANCELLED→IN_PROGRESS returned HTTP $STATUS (expected 422)"
+  fi
+fi
+
 # Rate limiting check: 20 rapid login attempts
 echo "  ⏱️   Testing login rate limiting (20 rapid requests)..."
 FAIL_COUNT=0
@@ -246,6 +349,142 @@ if [ "$STATUS" = "422" ]; then
   _pass "Empty password rejected with 422"
 else
   _fail "Empty password accepted (HTTP $STATUS)"
+fi
+
+# ─── Module 14 — Enterprise Governance & Compliance ─────────────────────────
+_info "Module 14 — Enterprise Governance & Compliance"
+
+# Security headers — all 8 required headers
+HEADERS=$(curl -sI "$BASE_URL/health")
+if echo "$HEADERS" | grep -qi "x-content-type-options"; then
+  _pass "Security header X-Content-Type-Options present"
+else
+  _fail "Security header X-Content-Type-Options missing — add SecurityHeadersMiddleware"
+fi
+if echo "$HEADERS" | grep -qi "x-xss-protection"; then
+  _pass "Security header X-XSS-Protection present"
+else
+  _fail "Security header X-XSS-Protection missing"
+fi
+if echo "$HEADERS" | grep -qi "x-frame-options"; then
+  _pass "Security header X-Frame-Options present"
+else
+  _fail "Security header X-Frame-Options missing"
+fi
+if echo "$HEADERS" | grep -qi "strict-transport-security"; then
+  _pass "Security header Strict-Transport-Security (HSTS) present"
+else
+  _fail "Security header Strict-Transport-Security missing"
+fi
+if echo "$HEADERS" | grep -qi "content-security-policy"; then
+  _pass "Security header Content-Security-Policy present"
+else
+  _fail "Security header Content-Security-Policy missing"
+fi
+if echo "$HEADERS" | grep -qi "referrer-policy"; then
+  _pass "Security header Referrer-Policy present"
+else
+  _fail "Security header Referrer-Policy missing"
+fi
+if echo "$HEADERS" | grep -qi "cache-control:.*no-store"; then
+  _pass "Security header Cache-Control: no-store present (prevents proxy caching of API responses)"
+else
+  _fail "Cache-Control: no-store missing — API responses with user data may be stored by intermediate proxies"
+fi
+if echo "$HEADERS" | grep -qi "permissions-policy"; then
+  _pass "Security header Permissions-Policy present (restricts camera/mic/geolocation)"
+else
+  _fail "Permissions-Policy header missing — browser features not explicitly restricted"
+fi
+
+# RFC 9116 security disclosure policy
+SEC_TXT=$(curl -s "$BASE_URL/.well-known/security.txt")
+SEC_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$BASE_URL/.well-known/security.txt")
+if [ "$SEC_STATUS" = "200" ] && echo "$SEC_TXT" | grep -q "Contact:"; then
+  _pass "Security disclosure: GET /.well-known/security.txt returns 200 with Contact field (RFC 9116)"
+else
+  _fail "Security disclosure: /.well-known/security.txt returned HTTP $SEC_STATUS or missing Contact field"
+fi
+
+# Readiness probe
+STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$BASE_URL/ready")
+if [ "$STATUS" = "200" ]; then
+  _pass "Readiness probe GET /ready returns 200"
+else
+  _fail "Readiness probe GET /ready returned HTTP $STATUS (expected 200)"
+fi
+
+# Token revocation via logout
+if [ -n "$TOKEN_B" ]; then
+  STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+    -H "Authorization: Bearer $TOKEN_B" "$BASE_URL/auth/logout")
+  if [ "$STATUS" = "204" ]; then
+    _pass "Logout POST /auth/logout returns 204"
+    STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+      -H "Authorization: Bearer $TOKEN_B" "$BASE_URL/projects")
+    if [ "$STATUS" = "401" ]; then
+      _pass "Revoked token rejected with 401 — JTI revocation working"
+    else
+      _fail "Revoked token still accepted (HTTP $STATUS) — JTI revocation broken"
+    fi
+  else
+    _fail "Logout returned HTTP $STATUS (expected 204)"
+  fi
+fi
+
+# GDPR account deletion
+if [ -n "$GDPR_TOKEN" ]; then
+  STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
+    -H "Authorization: Bearer $GDPR_TOKEN" "$BASE_URL/auth/users/me")
+  if [ "$STATUS" = "204" ]; then
+    _pass "GDPR deletion DELETE /auth/users/me returns 204"
+    # Verify the token is now invalid (soft-deleted user not found by current_user dep)
+    STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+      -H "Authorization: Bearer $GDPR_TOKEN" "$BASE_URL/projects")
+    if [ "$STATUS" = "401" ]; then
+      _pass "Soft-deleted user's token rejected with 401"
+    else
+      _fail "Soft-deleted user's token still accepted (HTTP $STATUS) — GDPR soft delete broken"
+    fi
+  else
+    _fail "GDPR deletion returned HTTP $STATUS (expected 204)"
+  fi
+else
+  _fail "GDPR test skipped — could not obtain token (registration or login failed)"
+fi
+
+# Body size limit (MaxBodySizeMiddleware)
+STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE_URL/auth/register" \
+  -H "Content-Type: application/json" \
+  -H "Content-Length: 1048577" \
+  -d '{}')
+if [ "$STATUS" = "413" ]; then
+  _pass "Body size limit: Content-Length > 1 MiB rejected with 413"
+else
+  _fail "Body size limit not enforced: Content-Length > 1 MiB returned HTTP $STATUS (expected 413)"
+fi
+
+# Input length validation (Pydantic StringConstraints)
+if [ -n "$TOKEN_A" ]; then
+  LONG_NAME=$(python3 -c "print('x'*256)")
+  STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE_URL/projects" \
+    -H "Authorization: Bearer $TOKEN_A" -H "Content-Type: application/json" \
+    -d "{\"name\":\"$LONG_NAME\"}")
+  if [ "$STATUS" = "422" ]; then
+    _pass "Input validation: project name > 255 chars rejected with 422"
+  else
+    _fail "Input validation: project name > 255 chars returned HTTP $STATUS (expected 422)"
+  fi
+else
+  _fail "Input validation check skipped — TOKEN_A not available"
+fi
+
+# Observability: /metrics endpoint (Prometheus scrape target)
+STATUS=$(curl -s -o /dev/null -w "%{http_code}" -L "$BASE_URL/metrics")
+if [ "$STATUS" = "200" ]; then
+  _pass "Observability: GET /metrics returns 200 (Prometheus scrape target active)"
+else
+  _fail "Observability: GET /metrics returned HTTP $STATUS (expected 200) — check OTEL_ENABLED env var"
 fi
 
 # ─── Summary ─────────────────────────────────────────────────────────────────

@@ -1,0 +1,67 @@
+apiVersion: run.googleapis.com/v1
+kind: Service
+metadata:
+  name: task-manager-api
+  # Replace REGION and PROJECT_ID before deploying (done by deploy.sh substitute())
+  labels:
+    cloud.googleapis.com/location: REGION
+  annotations:
+    run.googleapis.com/ingress: all
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/minScale: "1"
+        autoscaling.knative.dev/maxScale: "10"
+        run.googleapis.com/cpu-throttling: "false"
+        # Connect to Cloud SQL: projects/PROJECT_ID/instances/task-manager-db
+        run.googleapis.com/cloudsql-instances: PROJECT_ID:REGION:task-manager-db
+    spec:
+      serviceAccountName: task-manager-api@PROJECT_ID.iam.gserviceaccount.com
+      containers:
+        - image: ghcr.io/GITHUB_USERNAME/task-manager/api:IMAGE_TAG
+          ports:
+            - containerPort: 8000
+          env:
+            - name: ENVIRONMENT
+              value: production
+            - name: OTEL_ENABLED
+              value: "false"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  key: latest
+                  name: task-manager-database-url
+            - name: SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  key: latest
+                  name: task-manager-secret-key
+            - name: CORS_ORIGINS
+              valueFrom:
+                secretKeyRef:
+                  key: latest
+                  name: task-manager-cors-origins
+          resources:
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 12
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 0
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8000
+            initialDelaySeconds: 0
+            periodSeconds: 10

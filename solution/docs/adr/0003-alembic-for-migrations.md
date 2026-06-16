@@ -41,5 +41,5 @@ Migrations are checked into git. In production, the `release_command = "alembic 
 
 **Convention adopted:**
 - Never edit `Base.metadata.create_all()` to apply schema changes in non-test code
-- `create_all()` is only used in the test `conftest.py` for the in-memory SQLite test DB
+- `create_all()` is only used in the test `conftest.py`, which runs against a real PostgreSQL database with `NullPool` (not SQLite — see `conftest.py` for the `ENVIRONMENT=test` / `NullPool` pattern)
 - Every migration file must have a working `downgrade()` function — PRs that add a migration without a downgrade are rejected in code review

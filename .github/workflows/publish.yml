@@ -1,12 +1,28 @@
 name: Publish & Deploy
 
 # Runs on every merge to main.
-# Jobs:
-#   publish-api      — build multi-stage API image, push to GHCR
-#   publish-frontend — build nginx frontend image, push to GHCR
-#   deploy           — deploy both images to Fly.io (requires manual approval)
 #
-# See docs/modules/13-continuous-deployment.md for full setup instructions.
+# Jobs:
+#   publish-api           — build multi-stage API image → GHCR → Trivy scan (hard gate) → SBOM
+#   publish-frontend      — build nginx frontend image  → GHCR → Trivy scan (hard gate) → SBOM
+#   aspire-manifest       — generate Aspire deployment manifest → upload as build artifact
+#   deploy-fly-staging    — same :sha image → Fly.io staging  (auto; requires Module 16 setup)
+#   deploy-fly-production — promote to Fly.io production     (manual approval gate)
+#   deploy-azure          — Azure Container Apps via azd      (Aspire-native; manual approval; gated by if:false)
+#   deploy-aws            — AWS ECS Fargate                   (manifest-informed; manual approval; gated by if:false)
+#   deploy-gcp            — GCP Cloud Run                     (manifest-informed; manual approval; gated by if:false)
+#
+# Deployment architecture:
+#   Azure  → azd reads azure.yaml → Aspire AppHost → provisions ACA + ACR + PostgreSQL
+#            (Aspire-native: azd builds images, provisions infra, runs post-deploy hook for migrations)
+#   AWS    → Aspire manifest generated as artifact; ECS task defs in aws/ecs/ drive the actual deploy
+#   GCP    → Aspire manifest generated as artifact; Cloud Run YAMLs in infra/gcp/ drive the actual deploy
+#   Fly.io → fly.toml + flyctl deploy (release_command runs Alembic before traffic switch)
+#
+# Fly.io staging/production (Module 16):  docs/modules/16-multi-environment.md
+# Azure Container Apps (Aspire-native):   azure.yaml + docs/modules/13-continuous-deployment.md
+# AWS ECS Fargate:                        aws/ecs/ + aspire-manifest artifact
+# GCP Cloud Run:                          infra/gcp/ + aspire-manifest artifact
 
 on:
   push:
@@ -15,18 +31,20 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
+  IMAGE_TAG: sha-${{ github.sha }}   # long SHA — consistent with type=sha,format=long below
 
 jobs:
   # ─── Build and publish API image ────────────────────────────────────────────
   publish-api:
-    name: Build and push API image
+    name: Build, scan, and push API image
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
+      security-events: write   # required for Trivy SARIF upload to GitHub Security tab
 
     outputs:
-      image-tag: ${{ steps.meta.outputs.tags }}
+      image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/api:${{ env.IMAGE_TAG }}
 
     steps:
       - uses: actions/checkout@v4
@@ -44,7 +62,7 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/api
           tags: |
-            type=sha,format=short
+            type=sha,format=long
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
 
       - name: Build and push API image
@@ -57,16 +75,47 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Scan API image for vulnerabilities (Trivy)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/api:${{ env.IMAGE_TAG }}
+          format: sarif
+          output: trivy-api.sarif
+          severity: CRITICAL,HIGH
+          exit-code: "1"   # hard gate — fails the job on any CRITICAL or HIGH CVE
+
+      - name: Upload Trivy results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()   # upload even when Trivy found issues so they appear in the Security tab
+        with:
+          sarif_file: trivy-api.sarif
+          category: trivy-api
+
+      - name: Generate SBOM (CycloneDX JSON)
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/api:${{ env.IMAGE_TAG }}
+          format: cyclonedx-json
+          output-file: sbom-api.json
+
+      - name: Upload SBOM as build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-api-${{ github.sha }}
+          path: sbom-api.json
+          retention-days: 90
+
   # ─── Build and publish frontend image ───────────────────────────────────────
   publish-frontend:
-    name: Build and push frontend image
+    name: Build, scan, and push frontend image
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
+      security-events: write
 
     outputs:
-      image-tag: ${{ steps.meta.outputs.tags }}
+      image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/frontend:${{ env.IMAGE_TAG }}
 
     steps:
       - uses: actions/checkout@v4
@@ -84,7 +133,7 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/frontend
           tags: |
-            type=sha,format=short
+            type=sha,format=long
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
 
       - name: Build and push frontend image
@@ -99,12 +148,202 @@ jobs:
           build-args: |
             VITE_API_URL=${{ vars.VITE_API_URL }}
 
-  # ─── Deploy to Fly.io ────────────────────────────────────────────────────────
-  deploy:
-    name: Deploy to Fly.io
+      - name: Scan frontend image for vulnerabilities (Trivy)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/frontend:${{ env.IMAGE_TAG }}
+          format: sarif
+          output: trivy-frontend.sarif
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+
+      - name: Upload Trivy results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-frontend.sarif
+          category: trivy-frontend
+
+      - name: Generate SBOM (CycloneDX JSON)
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/frontend:${{ env.IMAGE_TAG }}
+          format: cyclonedx-json
+          output-file: sbom-frontend.json
+
+      - name: Upload SBOM as build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-frontend-${{ github.sha }}
+          path: sbom-frontend.json
+          retention-days: 90
+
+  # ─── Aspire deployment manifest ─────────────────────────────────────────────
+  #
+  # Generates the canonical .NET Aspire manifest describing the app's deployment
+  # topology (containers, env vars, resource references). This manifest:
+  #   - Drives Azure deployment natively (azd reads the Aspire AppHost directly)
+  #   - Serves as the authoritative reference for AWS/GCP configs in aws/ecs/ and infra/gcp/
+  #   - Stored as a 90-day build artifact for traceability and compliance
+  #
+  # The manifest documents WHAT should be deployed; the cloud-specific jobs below
+  # implement HOW on each platform.
+
+  aspire-manifest:
+    name: Generate Aspire deployment manifest
+    runs-on: ubuntu-latest
+    needs: [publish-api, publish-frontend]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET 9
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "9.x"
+
+      - name: Restore Aspire workload
+        run: dotnet workload restore aspire/TaskManager.AppHost/TaskManager.AppHost.csproj
+
+      - name: Generate Aspire manifest
+        run: |
+          dotnet run --project aspire/TaskManager.AppHost \
+            -- --publisher manifest \
+               --output-path aspire-manifest.json
+
+      - name: Upload manifest as build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: aspire-manifest-${{ github.sha }}
+          path: aspire-manifest.json
+          retention-days: 90
+
+  # ─── SLSA provenance attestation ────────────────────────────────────────────
+  #
+  # Generates SLSA Level 3 provenance for both container images using the
+  # official SLSA GitHub Generator. The resulting attestation can be verified
+  # with `slsa-verifier` and attests that the image was built from this exact
+  # commit by GitHub Actions — not by any developer's machine.
+  #
+  # Provenance is pushed to GHCR alongside the image and can be inspected with:
+  #   cosign verify-attestation --type slsaprovenance ghcr.io/<repo>/api:<tag>
+
+  slsa-provenance:
+    name: Generate SLSA provenance
+    needs: [publish-api, publish-frontend]
+    permissions:
+      actions: read        # required to read workflow run
+      id-token: write      # required for keyless signing via Sigstore
+      packages: write      # required to push attestation to GHCR
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_container_slsa3.yml@v2.1.0
+    with:
+      image: ghcr.io/${{ github.repository }}/api
+      digest: ${{ needs.publish-api.outputs.image }}
+      registry-username: ${{ github.actor }}
+    secrets:
+      registry-password: ${{ secrets.GITHUB_TOKEN }}
+
+  # ─── Slack failure notification ──────────────────────────────────────────────
+  #
+  # Fires whenever any job in this workflow fails on main.
+  # Requires SLACK_WEBHOOK_URL secret (Incoming Webhook from Slack app settings).
+
+  notify-failure:
+    name: Notify Slack on failure
+    needs: [publish-api, publish-frontend, aspire-manifest, tag-release]
+    runs-on: ubuntu-latest
+    if: failure()
+    steps:
+      - name: Post failure message to Slack
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          WORKFLOW: ${{ github.workflow }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          ACTOR: ${{ github.actor }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          if [ -z "$SLACK_WEBHOOK_URL" ]; then
+            echo "SLACK_WEBHOOK_URL not configured — skipping notification"
+            exit 0
+          fi
+          curl -sf -X POST "$SLACK_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"text\": \":rotating_light: *${WORKFLOW}* failed on \`main\`\",
+              \"attachments\": [{
+                \"color\": \"danger\",
+                \"fields\": [
+                  {\"title\": \"Actor\", \"value\": \"${ACTOR}\", \"short\": true},
+                  {\"title\": \"Commit\", \"value\": \"${COMMIT_SHA:0:7}\", \"short\": true},
+                  {\"title\": \"Run\", \"value\": \"${RUN_URL}\", \"short\": false}
+                ]
+              }]
+            }"
+
+  # ─── Semantic release tag ───────────────────────────────────────────────────
+  #
+  # Reads the version from backend/pyproject.toml and creates a GitHub Release
+  # tagged v<version> only when that tag does not yet exist.  To cut a new release
+  # bump the version in pyproject.toml and frontend/package.json, merge to main,
+  # and this job will create the tag and release automatically.
+
+  tag-release:
+    name: Tag release if version is new
     needs: [publish-api, publish-frontend]
     runs-on: ubuntu-latest
-    environment: production   # GitHub Environment — configure manual approval in repo settings
+    permissions:
+      contents: write   # required to create tags and releases
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # need full history to check existing tags
+
+      - name: Read version from pyproject.toml
+        id: version
+        run: |
+          VERSION=$(grep '^version = ' backend/pyproject.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Check if tag already exists
+        id: check_tag
+        run: |
+          if git rev-parse "${{ steps.version.outputs.tag }}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub Release
+        if: steps.check_tag.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ steps.version.outputs.tag }}" \
+            --title "Release ${{ steps.version.outputs.tag }}" \
+            --notes "API image: \`ghcr.io/${{ github.repository }}/api:sha-${{ github.sha }}\`" \
+            --draft=false \
+            --prerelease=false
+
+  # ─── Fly.io staging → production promotion pipeline (Module 16) ─────────────
+  #
+  # Same-artifact principle: the :sha-<commit> image built above is deployed to
+  # staging first (automatic) and then promoted to production (manual approval).
+  # Never rebuilt between environments.
+  #
+  # To activate:
+  #   1. Complete docs/modules/16-multi-environment.md activities 1–3
+  #   2. Create GitHub Environments: staging (no reviewers) + production (reviewers)
+  #   3. Add FLY_API_TOKEN to each environment's secrets
+  #   4. Remove the `if: false` lines from both jobs below
+
+  deploy-fly-staging:
+    name: Deploy to Fly.io staging
+    needs: [publish-api]
+    runs-on: ubuntu-latest
+    environment: staging   # no required reviewers — auto-deploys when publish-api passes
+    if: false   # Enable: remove this line; see docs/modules/16-multi-environment.md
 
     steps:
       - uses: actions/checkout@v4
@@ -112,34 +351,304 @@ jobs:
       - name: Install flyctl
         uses: superfly/flyctl-actions/setup-flyctl@master
 
-      - name: Deploy API
+      - name: Deploy API to staging
         run: |
           flyctl deploy \
-            --app task-manager-api \
-            --image ghcr.io/${{ github.repository }}/api:sha-${{ github.sha }}
+            --app task-manager-staging \
+            --image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/api:${{ env.IMAGE_TAG }}
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
-      - name: Verify health check
+      - name: Staging health check
         run: |
-          echo "Waiting for health check to pass..."
+          STAGING_URL="https://task-manager-staging.fly.dev"
           for i in $(seq 1 12); do
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://task-manager-api.fly.dev/health 2>/dev/null || echo "000")
-            echo "Attempt $i/12: HTTP $STATUS"
-            if [ "$STATUS" = "200" ]; then
-              echo "✅ Health check passed"
-              exit 0
-            fi
+            STATUS=$(curl -sf -o /dev/null -w "%{http_code}" "$STAGING_URL/health")
+            echo "Attempt $i: HTTP $STATUS"
+            [ "$STATUS" = "200" ] && echo "✅ Staging healthy" && exit 0
             sleep 10
           done
-          echo "❌ Health check failed after 120 s — rolling back"
+          echo "❌ Staging health check failed — blocking production promotion"
+          exit 1
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      - name: Smoke test against staging
+        run: |
+          docker run --rm grafana/k6 run \
+            -e BASE_URL=https://task-manager-staging.fly.dev \
+            - < load-tests/k6/smoke.js
+
+  deploy-fly-production:
+    name: Promote to Fly.io production
+    needs: [deploy-fly-staging]   # only runs if staging deploy + smoke test succeeded
+    runs-on: ubuntu-latest
+    environment: production   # requires a named reviewer to approve
+    if: false   # Enable after deploy-fly-staging is configured and verified
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Verify supply chain (cosign)
+        # Confirms this image was built by THIS repo's GitHub Actions workflow,
+        # not a tampered image pushed outside of CI.
+        # Requires cosign to be available; ubuntu-latest includes it via sigstore.
+        run: |
+          cosign verify \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/api:${{ env.IMAGE_TAG }} \
+            --certificate-identity-regexp \
+              "https://github.com/${{ github.repository }}/.*" \
+            --certificate-oidc-issuer \
+              "https://token.actions.githubusercontent.com"
+        continue-on-error: true   # non-blocking until team baseline is established
+
+      - name: Deploy same image to production
+        run: |
+          flyctl deploy \
+            --app task-manager-api \
+            --image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/api:${{ env.IMAGE_TAG }}
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      - name: Production health check
+        run: |
+          for i in $(seq 1 12); do
+            STATUS=$(curl -sf -o /dev/null -w "%{http_code}" \
+              "https://task-manager-api.fly.dev/health")
+            echo "Attempt $i: HTTP $STATUS"
+            [ "$STATUS" = "200" ] && echo "✅ Production healthy" && exit 0
+            sleep 10
+          done
+          echo "❌ Production health check failed — rolling back"
           flyctl releases rollback --app task-manager-api
           exit 1
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
-      - name: Smoke test against production
+      - name: Production smoke test
+        run: |
+          docker run --rm grafana/k6 run \
+            -e BASE_URL=https://task-manager-api.fly.dev \
+            - < load-tests/k6/smoke.js
+
+  # ─── Deploy to Azure Container Apps (Aspire-native via azd) ────────────────────
+  #
+  # This is the most complete Aspire deployment path. azd reads azure.yaml,
+  # which points to the Aspire AppHost. azd then:
+  #   1. Generates the Aspire manifest from Program.cs
+  #   2. Provisions Azure infrastructure (ACA Environment, ACR, PostgreSQL, Key Vault)
+  #   3. Builds Docker images and pushes to ACR (separate from GHCR)
+  #   4. Updates Container App revisions
+  #   5. Runs the postdeploy hook from azure.yaml (Alembic migrations)
+  #
+  # To activate:
+  #   1. Run: azd auth login && azd pipeline config  (writes GitHub secrets automatically)
+  #   2. Create GitHub Environment: production-azure (add reviewer + AZURE_* secrets)
+  #   3. Remove the `if: false` line below
+
+  deploy-azure:
+    name: Deploy to Azure Container Apps (Aspire)
+    needs: [publish-api, publish-frontend]
+    runs-on: ubuntu-latest
+    environment: production-azure   # GitHub Environment — configure manual approval + secrets
+    if: false   # Enable: remove this line; run `azd pipeline config` first
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET 9 (required for Aspire AppHost)
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "9.x"
+
+      - name: Restore Aspire workload
+        run: dotnet workload restore aspire/TaskManager.AppHost/TaskManager.AppHost.csproj
+
+      - name: Install azd
+        uses: Azure/setup-azd@v1
+
+      - name: Log in to Azure (OIDC — keyless, no long-lived credentials)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Provision Azure infrastructure (idempotent)
+        # Creates ACA Environment, ACR, PostgreSQL, and Key Vault if they don't exist.
+        # Safe to re-run — existing resources are not recreated.
+        run: azd provision --no-prompt
+        env:
+          AZURE_ENV_NAME: ${{ vars.AZURE_ENV_NAME }}
+          AZURE_LOCATION: ${{ vars.AZURE_LOCATION }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy to Azure Container Apps
+        # Builds images from source (using Aspire manifest Dockerfiles) and pushes to ACR.
+        # Then updates Container App revisions. The azure.yaml postdeploy hook runs
+        # Alembic migrations after this step completes.
+        run: azd deploy --no-prompt
+        env:
+          AZURE_ENV_NAME: ${{ vars.AZURE_ENV_NAME }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Health check
+        run: |
+          API_URL=$(azd env get-value SERVICE_API_URI 2>/dev/null || \
+                    azd env get-values --output json | jq -r '.SERVICE_API_URI // empty')
+          if [ -z "$API_URL" ]; then
+            echo "⚠️  Could not determine API URL from azd env — skipping health check"
+            exit 0
+          fi
+          echo "API URL: $API_URL"
+          for i in $(seq 1 12); do
+            STATUS=$(curl -sf -o /dev/null -w "%{http_code}" "${API_URL}/health")
+            echo "Attempt $i: HTTP $STATUS"
+            [ "$STATUS" = "200" ] && echo "✅ Azure deployment healthy" && exit 0
+            sleep 10
+          done
+          echo "❌ Health check failed — investigate in Azure Portal"
+          exit 1
+        env:
+          AZURE_ENV_NAME: ${{ vars.AZURE_ENV_NAME }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Smoke test
+        run: |
+          API_URL=$(azd env get-value SERVICE_API_URI 2>/dev/null || \
+                    azd env get-values --output json | jq -r '.SERVICE_API_URI // empty')
+          if [ -n "$API_URL" ]; then
+            docker run --rm grafana/k6 run - \
+              -e BASE_URL="$API_URL" < load-tests/k6/smoke.js
+          fi
+        env:
+          AZURE_ENV_NAME: ${{ vars.AZURE_ENV_NAME }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+  # ─── Deploy to AWS ECS Fargate (manifest-informed) ────────────────────────────
+  #
+  # The Aspire manifest (generated by the aspire-manifest job above) is the
+  # authoritative description of what to deploy. The ECS task definitions in
+  # aws/ecs/ implement the same topology for Fargate — same env vars, same
+  # image references, same health check paths.
+  #
+  # To activate:
+  #   1. Configure OIDC trust: aws/README.md → "GitHub OIDC setup"
+  #   2. Create GitHub Environment: production-aws (add reviewer + AWS_* secrets)
+  #   3. Remove the `if: false` line below
+
+  deploy-aws:
+    name: Deploy to AWS ECS Fargate
+    needs: [publish-api, publish-frontend, aspire-manifest]
+    runs-on: ubuntu-latest
+    environment: production-aws   # GitHub Environment — configure manual approval + secrets
+    if: false   # Enable: remove this line and configure AWS_* secrets
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Aspire manifest (reference)
+        uses: actions/download-artifact@v4
+        with:
+          name: aspire-manifest-${{ github.sha }}
+
+      - name: Configure AWS credentials (OIDC — keyless)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Deploy to ECS
+        env:
+          REGION: ${{ vars.AWS_REGION }}
+          ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+          GITHUB_USERNAME: ${{ github.repository_owner }}
+          IMAGE_TAG: ${{ env.IMAGE_TAG }}
+          CLUSTER: ${{ vars.ECS_CLUSTER }}
+        run: bash aws/deploy.sh
+
+      - name: Smoke test
         run: |
           docker run --rm grafana/k6 run - \
-            -e BASE_URL=https://task-manager-api.fly.dev \
-            < load-tests/k6/smoke.js
+            -e BASE_URL="${{ vars.AWS_ALB_URL }}" < load-tests/k6/smoke.js
+
+  # ─── Deploy to GCP Cloud Run (manifest-informed) ─────────────────────────────
+  #
+  # The Aspire manifest (generated by the aspire-manifest job above) is the
+  # authoritative description of what to deploy. The Cloud Run YAMLs in infra/gcp/
+  # implement the same topology — same env vars, same image references, same probes.
+  #
+  # To activate:
+  #   1. Enable Workload Identity Federation in your GCP project (keyless auth)
+  #   2. Create GitHub Environment: production-gcp (add reviewer + GCP_* secrets)
+  #   3. Remove the `if: false` line below
+
+  deploy-gcp:
+    name: Deploy to GCP Cloud Run
+    needs: [publish-api, publish-frontend, aspire-manifest]
+    runs-on: ubuntu-latest
+    environment: production-gcp   # GitHub Environment — configure manual approval + secrets
+    if: false   # Enable: remove this line and configure GCP_* secrets
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Aspire manifest (reference)
+        uses: actions/download-artifact@v4
+        with:
+          name: aspire-manifest-${{ github.sha }}
+
+      - name: Authenticate to Google Cloud (Workload Identity — keyless)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Deploy to Cloud Run
+        env:
+          PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          REGION: ${{ vars.GCP_REGION }}
+          GITHUB_USERNAME: ${{ github.repository_owner }}
+          IMAGE_TAG: ${{ env.IMAGE_TAG }}
+        run: bash infra/gcp/deploy.sh
+
+      - name: Smoke test
+        run: |
+          API_URL=$(gcloud run services describe task-manager-api \
+            --region "${{ vars.GCP_REGION }}" --project "${{ vars.GCP_PROJECT_ID }}" \
+            --format="value(status.url)")
+          docker run --rm grafana/k6 run - \
+            -e BASE_URL="$API_URL" < load-tests/k6/smoke.js
+
+  # ─── DAST: ZAP baseline scan on staging (Module 12 §10) ─────────────────────
+  #
+  # Runs a passive ZAP baseline scan against staging after every successful deploy.
+  # Catches security regressions (missing headers, new reflected inputs) before
+  # they reach production. Does NOT send destructive payloads — use the full scan
+  # (pen-tests/zap-scan.sh full) for active testing against a disposable environment.
+  #
+  # To activate:
+  #   1. Complete deploy-fly-staging setup (Module 16)
+  #   2. Remove the `if: false` line below
+  #   3. Optionally remove cmd_options: '-I' to hard-gate on MEDIUM+ findings
+
+  zap-baseline-scan:
+    name: ZAP baseline scan (staging)
+    needs: deploy-fly-staging
+    runs-on: ubuntu-latest
+    if: false   # Enable after activating deploy-fly-staging (Module 16)
+
+    steps:
+      - name: ZAP baseline scan
+        uses: zaproxy/action-baseline@v0.12.0
+        with:
+          target: 'https://task-manager-staging.fly.dev'
+          fail_action: true
+          cmd_options: '-I'   # informational-only mode — remove to hard-gate on MEDIUM+
+          issue_title: 'ZAP Baseline Scan — Staging'

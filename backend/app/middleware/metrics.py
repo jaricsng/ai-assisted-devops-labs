@@ -16,7 +16,7 @@ class _Counters:
     errors_4xx: int = 0
     errors_5xx: int = 0
     duration_sum_ms: float = 0.0
-    slow_requests: int = 0          # > 500 ms
+    slow_requests: int = 0  # > 500 ms
     path_counts: dict = field(default_factory=lambda: defaultdict(int))
 
 
@@ -24,24 +24,6 @@ class _Counters:
 # For production use, replace with Prometheus or OpenTelemetry counters.
 _counters = _Counters()
 SLOW_REQUEST_THRESHOLD_MS = 500
-
-
-def get_metrics() -> dict:
-    """Return a snapshot of current in-process counters.
-
-    Exposed by GET /metrics for lightweight operational visibility.
-    """
-    total = _counters.requests_total or 1  # avoid division by zero
-    return {
-        "requests_total": _counters.requests_total,
-        "errors_4xx": _counters.errors_4xx,
-        "errors_5xx": _counters.errors_5xx,
-        "slow_requests": _counters.slow_requests,
-        "avg_duration_ms": round(_counters.duration_sum_ms / total, 2),
-        "top_paths": dict(
-            sorted(_counters.path_counts.items(), key=lambda x: x[1], reverse=True)[:10]
-        ),
-    }
 
 
 class MetricsMiddleware(BaseHTTPMiddleware):

@@ -1,0 +1,36 @@
+{
+  "family": "task-manager-frontend",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "256",
+  "memory": "512",
+  "executionRoleArn": "arn:aws:iam::ACCOUNT_ID:role/ecsTaskExecutionRole",
+  "taskRoleArn": "arn:aws:iam::ACCOUNT_ID:role/taskManagerTaskRole",
+  "containerDefinitions": [
+    {
+      "name": "frontend",
+      "image": "ghcr.io/GITHUB_USERNAME/task-manager/frontend:IMAGE_TAG",
+      "portMappings": [
+        {
+          "containerPort": 80,
+          "protocol": "tcp"
+        }
+      ],
+      "healthCheck": {
+        "command": ["CMD-SHELL", "wget -qO- http://localhost/ > /dev/null || exit 1"],
+        "interval": 30,
+        "timeout": 5,
+        "retries": 3,
+        "startPeriod": 10
+      },
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/task-manager-frontend",
+          "awslogs-region": "REGION",
+          "awslogs-stream-prefix": "frontend"
+        }
+      }
+    }
+  ]
+}

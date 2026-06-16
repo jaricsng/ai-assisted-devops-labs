@@ -1,10 +1,12 @@
 from datetime import datetime
-from pydantic import BaseModel, EmailStr, field_validator
+from typing import Annotated
+
+from pydantic import BaseModel, EmailStr, StringConstraints, field_validator
 
 
 class UserCreate(BaseModel):
     email: EmailStr
-    full_name: str
+    full_name: Annotated[str, StringConstraints(min_length=1, max_length=255)]
     password: str
 
     @field_validator("password")

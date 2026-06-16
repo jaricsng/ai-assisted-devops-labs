@@ -1,0 +1,31 @@
+# CODEOWNERS — automatic reviewer assignment
+#
+# Patterns are evaluated top-to-bottom; the LAST matching rule wins.
+# Reference: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default owners for everything not matched below
+*                                       @jaricsng
+
+# Security-sensitive backend paths — require security team review
+backend/app/middleware/               @jaricsng
+backend/app/routers/auth.py           @jaricsng
+backend/app/services/auth_service.py  @jaricsng
+backend/app/routers/deps.py           @jaricsng
+
+# Database migrations — require DB owner review
+backend/alembic/                      @jaricsng
+
+# CI/CD pipelines — require platform team review
+.github/workflows/                    @jaricsng
+.github/CODEOWNERS                    @jaricsng
+
+# Infrastructure and cloud configs
+aws/                                  @jaricsng
+infra/gcp/                            @jaricsng
+aspire/                               @jaricsng
+fly.toml                              @jaricsng
+azure.yaml                            @jaricsng
+
+# Security policy
+SECURITY.md                           @jaricsng
+pen-tests/                            @jaricsng

@@ -3,7 +3,11 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { projectsApi } from "../api/projects";
 
-export function ProjectsPage() {
+interface Props {
+  onLogout?: () => void;
+}
+
+export function ProjectsPage({ onLogout }: Props) {
   const qc = useQueryClient();
   const [name, setName] = useState("");
   const { data: projects, isLoading } = useQuery({ queryKey: ["projects"], queryFn: projectsApi.list });
@@ -20,7 +24,17 @@ export function ProjectsPage() {
 
   return (
     <div style={{ maxWidth: 700, margin: "40px auto", padding: 24 }}>
-      <h1>Projects</h1>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+        <h1 style={{ margin: 0 }}>Projects</h1>
+        {onLogout && (
+          <button
+            onClick={() => { localStorage.removeItem("access_token"); onLogout(); }}
+            style={{ fontSize: 14 }}
+          >
+            Logout
+          </button>
+        )}
+      </div>
       <form
         onSubmit={(e) => { e.preventDefault(); if (name.trim()) createProject.mutate(name.trim()); }}
         style={{ display: "flex", gap: 8, marginBottom: 24 }}

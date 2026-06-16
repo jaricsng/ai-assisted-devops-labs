@@ -1,0 +1,149 @@
+# Prometheus recording rules — Task Manager SLI/SLO definitions
+#
+# SLOs:
+#   Latency  — P95 response time < 500 ms (validated by k6 load test at 50 VUs)
+#   Errors   — 5xx error rate < 1% (validated by k6 load test at 50 VUs)
+#   Availability — /ready probe success > 99.9% over 30-day rolling window
+#
+# Metric source: FastAPIInstrumentor (pre-1.23 OTel semconv)
+#   http.server.duration → http_server_duration_milliseconds (histogram, in ms)
+#   Labels: http_method, http_status_code, http_flavor, http_scheme
+
+groups:
+  - name: task-manager-sli
+    interval: 60s
+    rules:
+      # ── Request rate ─────────────────────────────────────────────────────────
+      - record: job:http_requests:rate5m
+        expr: |
+          sum(rate(http_server_duration_milliseconds_count[5m]))
+        labels:
+          job: task-manager-api
+
+      # ── Error rate (5xx) ─────────────────────────────────────────────────────
+      - record: job:http_errors_5xx:rate5m
+        expr: |
+          sum(rate(http_server_duration_milliseconds_count{http_status_code=~"5.."}[5m]))
+        labels:
+          job: task-manager-api
+
+      # SLI: error ratio (0.0–1.0). SLO threshold: < 0.01 (1%)
+      - record: job:http_error_ratio:rate5m
+        expr: |
+          job:http_errors_5xx:rate5m
+          /
+          job:http_requests:rate5m
+        labels:
+          job: task-manager-api
+
+      # ── Latency ──────────────────────────────────────────────────────────────
+      # SLI: P95 latency in milliseconds. SLO threshold: < 500 ms
+      - record: job:http_p95_latency_ms:rate5m
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(http_server_duration_milliseconds_bucket[5m])) by (le)
+          )
+        labels:
+          job: task-manager-api
+
+      # P99 latency for observability (not an SLO target, just tracked)
+      - record: job:http_p99_latency_ms:rate5m
+        expr: |
+          histogram_quantile(0.99,
+            sum(rate(http_server_duration_milliseconds_bucket[5m])) by (le)
+          )
+        labels:
+          job: task-manager-api
+
+      # ── Availability ─────────────────────────────────────────────────────────
+      # SLI: fraction of time /ready probe succeeds. SLO target: > 0.999 (99.9%)
+      - record: job:readiness_probe_success:avg5m
+        expr: |
+          avg_over_time(probe_success{job="readiness"}[5m])
+        labels:
+          job: task-manager-api
+
+      # ── Rejection rate (429) ─────────────────────────────────────────────────
+      # Rate-limiter firing — elevated values indicate brute-force attempts
+      - record: job:http_rejections:rate1m
+        expr: |
+          sum(rate(http_server_duration_milliseconds_count{http_status_code="429"}[1m]))
+        labels:
+          job: task-manager-api
+
+      # ── Module-15 SLO names (task_manager: prefix) ───────────────────────────
+      # These aliases follow the naming convention in docs/modules/15-slos-and-error-budgets.md.
+      # Both sets of names resolve to the same values; the task_manager: names satisfy
+      # the module checkpoint: `task_manager:request_availability:rate5m`.
+
+      # Availability SLI: ratio of successful (non-5xx) requests
+      - record: task_manager:request_availability:rate5m
+        expr: |
+          1 - (
+            sum(rate(http_server_duration_milliseconds_count{http_status_code=~"5.."}[5m]))
+            /
+            sum(rate(http_server_duration_milliseconds_count[5m]))
+          )
+
+      # Latency SLI: P95 request duration in seconds (module uses seconds; API emits ms)
+      - record: task_manager:request_p95_seconds:rate5m
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(http_server_duration_milliseconds_bucket[5m])) by (le)
+          ) / 1000
+
+      # Error budget burn rate (30-day window, 1-hour burn rate)
+      # Burn rate > 1.0 means on track to exhaust budget in < 30 days
+      # Burn rate > 14.4 means budget gone in < 2 hours — page immediately
+      - record: task_manager:error_budget_burn_rate:1h
+        expr: |
+          (
+            sum(rate(http_server_duration_milliseconds_count{http_status_code=~"5.."}[1h]))
+            /
+            sum(rate(http_server_duration_milliseconds_count[1h]))
+          ) / 0.01
+
+  - name: task-manager-slo
+    rules:
+      # Page immediately if burn rate is so high the budget will be gone in 2 hours
+      - alert: ErrorBudgetBurnRateCritical
+        expr: task_manager:error_budget_burn_rate:1h > 14.4
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "SLO error budget burning at critical rate"
+          description: >
+            Burn rate {{ $value | humanize }}x — at this rate the 30-day error budget
+            (1% of requests) will be exhausted in less than 2 hours.
+
+      # Warn if burn rate predicts budget exhaustion in < 6 hours
+      - alert: ErrorBudgetBurnRateHigh
+        expr: task_manager:error_budget_burn_rate:1h > 6
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SLO error budget burning at elevated rate"
+          description: >
+            Burn rate {{ $value | humanize }}x — budget exhaustion predicted in < 6 hours.
+
+      # Latency SLO breach — P95 > 500 ms
+      - alert: LatencySLOBreach
+        expr: task_manager:request_p95_seconds:rate5m > 0.5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "P95 latency exceeds 500 ms SLO"
+          description: "Current P95: {{ $value | humanizeDuration }}"
+
+      # Readiness SLO breach
+      - alert: ServiceUnreachable
+        expr: probe_success{instance="http://api:8000/ready"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Service readiness probe failing"
+          description: "The /ready endpoint has not returned 200 for more than 1 minute."

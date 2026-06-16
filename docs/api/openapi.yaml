@@ -22,6 +22,7 @@ components:
         email: { type: string, format: email }
         full_name: { type: string }
         created_at: { type: string, format: date-time }
+        deleted_at: { type: [string, "null"], format: date-time, description: "Non-null when account has been soft-deleted (GDPR erasure)" }
       required: [id, email, full_name, created_at]
 
     Project:
@@ -32,6 +33,7 @@ components:
         description: { type: [string, "null"] }
         owner_id: { type: integer }
         created_at: { type: string, format: date-time }
+        deleted_at: { type: [string, "null"], format: date-time, description: "Non-null when soft-deleted" }
       required: [id, name, owner_id, created_at]
 
     TaskStatus:
@@ -105,8 +107,11 @@ paths:
               type: object
               properties:
                 email: { type: string, format: email }
-                full_name: { type: string }
-                password: { type: string, minLength: 8 }
+                full_name: { type: string, minLength: 1, maxLength: 255 }
+                password:
+                  type: string
+                  minLength: 8
+                  description: "Must contain at least one uppercase letter and one digit"
               required: [email, full_name, password]
       responses:
         "201":
@@ -144,6 +149,55 @@ paths:
         "401":
           description: Invalid credentials
 
+  /auth/logout:
+    post:
+      tags: [auth]
+      summary: Log out and revoke the current session token
+      description: |
+        Revokes the JWT by recording its JTI (unique token ID) in the
+        server-side revocation list. Any subsequent request using the same
+        token will receive 401. The token is no longer usable even if it
+        has not yet expired.
+      responses:
+        "204":
+          description: Token revoked — session ended
+        "401":
+          description: Missing or invalid token
+
+  /auth/users/me:
+    delete:
+      tags: [auth]
+      summary: Delete the current user's account (GDPR right to erasure)
+      description: |
+        Soft-deletes the authenticated user. The user record is marked with
+        `deleted_at` rather than removed from the database (audit trail is
+        preserved). After deletion: login with the same email returns 401,
+        and all previously issued tokens return 401 (user not found).
+        To re-register, use a different email address.
+      responses:
+        "204":
+          description: Account soft-deleted
+        "401":
+          description: Missing or invalid token
+
+  /ready:
+    get:
+      tags: [health]
+      summary: Readiness probe — verifies database connectivity
+      security: []
+      responses:
+        "200":
+          description: API is ready and database is reachable
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ready }
+                  db: { type: string, example: ok }
+        "503":
+          description: Database unreachable
+
   /projects:
     get:
       tags: [projects]
@@ -166,8 +220,8 @@ paths:
             schema:
               type: object
               properties:
-                name: { type: string }
-                description: { type: string }
+                name: { type: string, minLength: 1, maxLength: 255 }
+                description: { type: string, maxLength: 2000 }
               required: [name]
       responses:
         "201":
@@ -208,6 +262,17 @@ paths:
     get:
       tags: [tasks]
       summary: List tasks in a project
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/TaskStatus" }
+          description: Filter tasks by status
+        - name: priority
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/TaskPriority" }
+          description: Filter tasks by priority
       responses:
         "200":
           content:
@@ -225,8 +290,8 @@ paths:
             schema:
               type: object
               properties:
-                title: { type: string }
-                description: { type: string }
+                title: { type: string, minLength: 1, maxLength: 255 }
+                description: { type: string, maxLength: 2000 }
                 priority: { $ref: "#/components/schemas/TaskPriority" }
                 assignee_id: { type: integer }
                 due_date: { type: string, format: date }
@@ -320,7 +385,7 @@ paths:
             schema:
               type: object
               properties:
-                body: { type: string }
+                body: { type: string, minLength: 1, maxLength: 5000 }
               required: [body]
       responses:
         "201":

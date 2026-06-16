@@ -8,17 +8,14 @@
 
 ## The Test Pyramid
 
-```
-           /\
-          /  \
-         / E2E \  ← Module 07b (Playwright — real browser, full stack)
-        /--------\
-       /Integration\ ← API endpoint tests (httpx + test DB)
-      /-------------\
-     / Component     \ ← React Testing Library (DOM, no API calls)
-    /-----------------\
-   /  Unit Tests       \ ← business logic, pure functions, no I/O
-  /---------------------\
+```mermaid
+flowchart BT
+    UNIT["**Unit Tests**\nbusiness logic · pure functions · no I/O\nmost tests · ~1 ms each"]
+    COMP["**Component Tests**\nReact Testing Library · DOM · no API calls\n~10 ms each"]
+    INT["**Integration Tests**\nAPI endpoints · httpx · test DB\n~100 ms each"]
+    E2E["**E2E Tests**\nPlaywright · real browser · full stack\nfewest · ~5 s each  ← Module 07b"]
+
+    UNIT --> COMP --> INT --> E2E
 ```
 
 | Level | Speed | Confidence | When to write |
@@ -37,6 +34,8 @@
 Unit tests run without a database, a network, or Docker. They test pure Python logic.
 
 ### Run existing tests
+
+> **Python version:** The backend requires Python 3.12. If your system runs a different version, use the Docker runner described in `README.md → Running Tests → Backend`. For unit-only tests that don't need the database, you can run them in any 3.12 environment.
 
 ```bash
 cd backend
@@ -59,6 +58,8 @@ Ask Claude Code:
 
 Add it to `tests/test_task_service.py`.
 
+> **Existing coverage in `test_task_service.py`:** `test_updates_assignee_id` and `test_updates_due_date` cover the `assignee_id` and `due_date` optional-field paths in `apply_task_update` — previously untested coverage gaps.
+
 ### What makes a good unit test?
 
 Ask Claude Code:
@@ -68,12 +69,24 @@ Ask Claude Code:
 
 ## Backend — Integration Tests
 
-Integration tests spin up the FastAPI app with a real (in-memory SQLite) database. They test that all the layers work together correctly over HTTP.
+Integration tests spin up the FastAPI app against a real PostgreSQL database (the same one used by the Docker Compose stack). They test that all the layers work together correctly over HTTP, using `httpx.AsyncClient` with `ASGITransport` — no HTTP port needed.
+
+> **DB isolation:** The test suite sets `ENVIRONMENT=test` which tells `database.py` to use `NullPool` (one fresh connection per request, closed immediately). This avoids asyncpg "Future attached to a different loop" errors caused by Starlette's `BaseHTTPMiddleware` creating a new task per request.
+>
+> Run all tests (including integration) using the Docker runner to guarantee Python 3.12 and DB connectivity:
+> ```bash
+> docker run --rm --network task-manager_default \
+>   -e DATABASE_URL="postgresql+asyncpg://taskuser:taskpass@db:5432/taskmanager" \
+>   -e SECRET_KEY="test-secret-key-for-local-dev-only" \
+>   -e ENVIRONMENT=test -e OTEL_ENABLED=false \
+>   -v "$(pwd)/backend:/app" python:3.12-slim \
+>   bash -c "pip install -e '.[dev]' -q && pytest tests/ --cov=app --cov-report=term-missing -v"
+> ```
 
 ### Write an integration test
 
 Ask Claude Code:
-> "Write an integration test in tests/test_tasks_api.py using httpx.AsyncClient and the conftest fixtures that:
+> "Write an integration test in tests/test_tasks_integration.py using httpx.AsyncClient and the conftest fixtures that:
 >
 > 1. Registers a user via POST /auth/register
 > 2. Logs in via POST /auth/login to get a token
@@ -84,10 +97,35 @@ Ask Claude Code:
 
 Look at `tests/conftest.py` to understand how the test client and database are set up before writing the test yourself.
 
+### Writing auth endpoint tests
+
+See `tests/test_auth_endpoints.py` for patterns used in the 11 integration tests covering register/login/logout/delete-account. Key patterns:
+
+- Use unique emails per test: `f"auth_{uuid.uuid4().hex[:8]}@example.com"` — avoids conflicts across test runs
+- Passwords must satisfy the validator: ≥8 chars, one uppercase, one digit (use `"Pass1234"`)
+- Test token revocation: call logout, then assert the same token returns 401
+- Test soft delete: delete account, then assert login and token use both return 401
+
+`tests/test_auth_integration.py` extends the auth coverage with security-focused tests grouped by class:
+
+| Class | Tests | What they verify |
+|-------|-------|-----------------|
+| `TestRegister` | 4 | Weak/empty/invalid email → 422; `hashed_password` not exposed in response |
+| `TestLogin` | 1 | User enumeration: identical error for wrong email vs wrong password |
+| `TestProtectedEndpoints` | 4 | Invalid token → 401; `alg:none` attack → 401; expired JWT → 401; token with no `sub` claim → 401 |
+
+`tests/test_security.py` covers transport-layer security properties that mirror what the pen test script checks automatically:
+
+| Class | Tests | What they verify |
+|-------|-------|-----------------|
+| `TestPasswordValidator` | 3 | Pydantic validator directly: no-uppercase raises, no-digit raises, strong password accepted |
+| `TestCORS` | 4 | Disallowed origin not reflected; allowed origin reflected; preflight ACAO headers; preflight disallowed origin not reflected |
+| `TestResponseHeaders` | 2 | `server` header doesn't contain framework/version; `x-powered-by` absent |
+
 ### Check coverage
 
 ```bash
-pytest --cov=app --cov-report=html
+ENVIRONMENT=test pytest --cov=app --cov-report=html
 open htmlcov/index.html   # macOS
 # xdg-open htmlcov/index.html  # Linux
 ```
@@ -131,9 +169,22 @@ Ask Claude Code:
 
 ## Checkpoint
 
-- [ ] `pytest --cov-fail-under=70` passes
+- [ ] Full backend test suite passes with coverage ≥ 70% (reference solution: 133 tests, 88%):
+  ```bash
+  docker run --rm --network task-manager_default \
+    -e DATABASE_URL="postgresql+asyncpg://taskuser:taskpass@db:5432/taskmanager" \
+    -e SECRET_KEY="test-secret-key-for-local-dev-only" \
+    -e ENVIRONMENT=test -e OTEL_ENABLED=false \
+    -v "$(pwd)/backend:/app" python:3.12-slim \
+    bash -c "pip install -e '.[dev]' -q && pytest tests/ --cov=app --cov-report=term-missing -v"
+  ```
 - [ ] `npm test` passes with coverage ≥ 70%
 - [ ] You've written at least one unit test, one integration test, and one component test
+- [ ] Auth endpoint tests (`test_auth_endpoints.py`) all pass — including logout revocation and soft-delete flow
+- [ ] Security-focused auth tests (`test_auth_integration.py`) pass — including `alg:none`, expired token, missing `sub`, and user-enumeration tests
+- [ ] Transport security tests (`test_security.py`) pass — including CORS policy and server header tests
+- [ ] Observability tests (`test_observability.py`) pass — including liveness/readiness, request ID, structured log fields, and OTel metrics
+- [ ] Governance tests (`test_governance.py`) pass — including 10 audit event types (REGISTER, LOGIN_SUCCESS, LOGIN_FAILED, LOGOUT, USER_DELETED, PROJECT_CREATED, PROJECT_DELETED, TASK_CREATED, TASK_UPDATED, TASK_DELETED), rate limiting, and SECRET_KEY validator
 - [ ] You ran `/code-review` on your test files and addressed at least one finding
 - [ ] `/check-python` shows no lint violations in the test files
 - [ ] `/check-standards` produces a full green report across both tiers

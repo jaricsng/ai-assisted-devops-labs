@@ -3,13 +3,18 @@
 ## Learning Objectives
 
 - Understand the difference between Continuous Integration, Continuous Delivery, and Continuous Deployment
+- Add `.dockerignore` files to reduce build context size and prevent accidental secret leakage
 - Build production-grade multi-stage Docker images for the API and frontend
 - Publish versioned Docker images to GitHub Container Registry (GHCR)
+- Tag releases semantically (`v0.1.0`) so every deployment is linked to a named release
 - Deploy the Task Manager to Fly.io from a GitHub Actions workflow
+- Deploy to Azure Container Apps using .NET Aspire and `azd` (Aspire-native path)
+- Understand how the Aspire manifest serves as the source of truth for AWS/GCP deployments
 - Manage production secrets safely using platform secret stores
 - Run Alembic database migrations as a step inside the deployment pipeline
 - Verify a deployment with a post-deploy health check and smoke test
 - Implement a one-command rollback for failed deployments
+- Understand SLSA provenance and how cryptographic attestations address supply chain risk
 
 ---
 
@@ -21,14 +26,29 @@
 | **Continuous Delivery** | Every passing `main` merge produces a deployment-ready artifact; a human approves release | Merge to `main` → image published; deploy on human approval |
 | **Continuous Deployment** | Every passing `main` merge deploys automatically to production | Merge to `main` → live in production within minutes |
 
-This module implements **Continuous Delivery** by default (you must approve the Fly.io deploy) and shows how to convert it to full Continuous Deployment by removing the manual approval gate.
+This module implements **Continuous Delivery** by default and shows how to convert it to full Continuous Deployment.
 
+```mermaid
+flowchart LR
+    push["Push to\nfeature branch"] --> CI["CI\nlint · test · security · build\n(Module 9)"]
+    CI --> merge["PR approved +\nmerged to main"]
+    merge --> CD["CD: build image → GHCR\ngenerate Aspire manifest\n→ deploy to platform\n→ run migrations\n→ verify health"]
 ```
-Developer pushes to feature branch
-    → CI: lint + test + security + build     (Module 9)
-    → PR approved + merged to main
-    → CD: build image → publish to GHCR → run migrations → deploy to Fly.io → verify health
-```
+
+---
+
+## Deployment Architecture
+
+This project supports four cloud targets. Each uses a different deployment mechanism but all share the same container images built from the same `publish.yml` workflow:
+
+| Platform | Mechanism | Who provisions infra? | Image registry |
+|----------|-----------|----------------------|----------------|
+| **Fly.io** | `flyctl deploy` + `fly.toml` | Fly.io managed (flyctl postgres create) | GHCR |
+| **Azure Container Apps** | `azd up` via Aspire AppHost | `azd provision` (auto — ACA, ACR, PostgreSQL, Key Vault) | ACR (built by azd) |
+| **AWS ECS Fargate** | `aws/deploy.sh` + ECS task defs | Manual (VPC, ECS cluster, RDS, ALB) | GHCR |
+| **GCP Cloud Run** | `infra/gcp/deploy.sh` + Cloud Run YAMLs | Manual (Cloud SQL, Secret Manager) | GHCR |
+
+**Azure is the most complete Aspire path.** `azd` reads `azure.yaml` which points to the Aspire AppHost. `azd provision` creates all the Azure infrastructure automatically from the Aspire manifest — no manual resource creation. For AWS and GCP, the Aspire manifest is generated as a build artifact and serves as the canonical reference for what the ECS/Cloud Run configs should contain.
 
 ---
 
@@ -37,7 +57,9 @@ Developer pushes to feature branch
 | Tool | Purpose |
 |------|---------|
 | GitHub Container Registry (GHCR) | Stores versioned Docker images; free for public repos |
-| Fly.io | Deployment platform; free tier supports one app + one PostgreSQL DB |
+| .NET Aspire AppHost | Orchestrates local dev + generates deployment manifest for all cloud targets |
+| `azd` (Azure Developer CLI) | Aspire-native Azure deployment: provisions infra + deploys containers |
+| Fly.io | Simple deployment platform; free tier supports one app + one PostgreSQL DB |
 | `flyctl` | Fly.io CLI for local commands and CI |
 | `fly.toml` | Declarative app configuration (region, resources, health checks) |
 | Alembic | Database migration runner (`alembic upgrade head` as a release command) |
@@ -59,7 +81,49 @@ Sign up and log in:
 flyctl auth signup         # or: flyctl auth login if you have an account
 ```
 
-### 2. Upgrade the Dockerfiles for production
+### 2. Add `.dockerignore` files
+
+Before writing the production Dockerfiles, add `.dockerignore` files to each tier. Without them, `docker build` sends everything — including `.venv`, `node_modules`, test files, and `.git` — to the Docker daemon, inflating build context and risking accidental inclusion of secrets.
+
+Create `backend/.dockerignore`:
+```
+__pycache__
+*.pyc
+.venv
+tests/
+.coverage
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.DS_Store
+.env
+.git
+.github
+docker-compose*.yml
+```
+
+Create `frontend/.dockerignore`:
+```
+dist/
+e2e/
+coverage/
+node_modules/
+.DS_Store
+.env
+.git
+.github
+docker-compose*.yml
+```
+
+Verify the build context is smaller after adding `.dockerignore`:
+```bash
+docker build --no-cache -t task-manager-api:test backend/ 2>&1 | grep "Sending build context"
+```
+
+Ask Claude Code:
+> "Why does a missing `.dockerignore` in a Node.js project particularly hurt build performance? What happens if `node_modules/` is sent to the build context in a multi-stage build where the first stage runs `npm ci`?"
+
+### 3. Upgrade the Dockerfiles for production
 
 The starter Dockerfiles are development-grade — they install dev dependencies and run the dev server. Production needs:
 - **Multi-stage builds** — compile assets in one stage, copy only the output into the final image
@@ -89,47 +153,38 @@ docker run --rm -p 8000:8000 -e DATABASE_URL=... -e SECRET_KEY=... task-manager-
 
 GHCR stores Docker images linked to your GitHub repository. Images are tagged with the git commit SHA so every deployment is traceable.
 
-Create `.github/workflows/publish.yml`:
+Open `.github/workflows/publish.yml` — the workflow is already written. Read and understand the key design decisions:
 
 ```yaml
-name: Publish
+name: Publish & Deploy
 
 on:
   push:
-    branches: [main]   # only publish on merges to main, not on every PR
+    branches: [main]
 
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
+  IMAGE_TAG: sha-${{ github.sha }}   # long SHA — must match type=sha,format=long below
 
 jobs:
   publish-api:
-    name: Build and push API image
-    runs-on: ubuntu-latest
+    name: Build, scan, and push API image
     permissions:
       contents: read
-      packages: write   # required to push to GHCR
-
-    outputs:
-      image-tag: ${{ steps.meta.outputs.tags }}
+      packages: write            # required to push to GHCR
+      security-events: write     # required for Trivy SARIF upload to Security tab
 
     steps:
-      - uses: actions/checkout@v4
+      # ... login + checkout ...
 
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}  # no extra secret needed
-
-      - name: Extract metadata (tags and labels)
+      - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/api
           tags: |
-            type=sha,format=short          # ghcr.io/user/repo/api:sha-abc1234
+            type=sha,format=long   # full 40-char SHA — matches IMAGE_TAG above
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
 
       - name: Build and push API image
@@ -138,51 +193,28 @@ jobs:
           context: backend/
           push: true
           tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha     # GitHub Actions layer cache
-          cache-to: type=gha,mode=max
-
-  publish-frontend:
-    name: Build and push frontend image
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-
-    outputs:
-      image-tag: ${{ steps.meta.outputs.tags }}
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/frontend
-          tags: |
-            type=sha,format=short
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
-
-      - name: Build and push frontend image
-        uses: docker/build-push-action@v5
-        with:
-          context: frontend/
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          build-args: |
-            VITE_API_URL=${{ vars.VITE_API_URL }}   # set in repo Variables (not Secrets)
+
+      - name: Scan API image for vulnerabilities (Trivy)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/api:${{ env.IMAGE_TAG }}
+          severity: CRITICAL,HIGH
+          exit-code: "1"   # hard gate — CRITICAL/HIGH CVE fails the job
+
+      - name: Generate SBOM (CycloneDX JSON)
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/api:${{ env.IMAGE_TAG }}
+          format: cyclonedx-json
+          output-file: sbom-api.json
 ```
+
+Key design decisions to understand:
+- **`IMAGE_TAG: sha-${{ github.sha }}`** — the SHA is defined once at the workflow level and reused consistently. `type=sha,format=long` produces the same 40-char tag. If `format=short` (7 chars) were used instead, the deploy step referencing `sha-${{ github.sha }}` would fail to find the image — a silent but critical mismatch.
+- **Trivy hard gate** — `exit-code: "1"` means any CRITICAL or HIGH CVE in the published image fails the job and blocks the deploy. The SARIF upload uses `if: always()` so findings appear in the Security tab even when the scan fails.
+- **SBOM** — the Software Bill of Materials lists every package in the image. Required for supply chain compliance and incident response (e.g., quickly determining whether a newly disclosed CVE affects your image).
 
 Push to `main` and verify the images appear in your GitHub repo under **Packages**.
 
@@ -192,9 +224,8 @@ Ask Claude Code:
 ### 2. Create the Fly.io app
 
 ```bash
-# Create the API app (from the backend/ directory)
-cd backend
-flyctl launch --name task-manager-api --no-deploy
+# Create the API app
+flyctl launch --name task-manager-api --no-deploy --config fly.toml
 
 # Create a managed PostgreSQL database on Fly.io
 flyctl postgres create --name task-manager-db
@@ -203,10 +234,10 @@ flyctl postgres create --name task-manager-db
 flyctl postgres attach task-manager-db --app task-manager-api
 ```
 
-Fly.io creates `fly.toml` in the current directory. Open it and verify the key sections:
+A `fly.toml` is already provided at the project root. Open it and replace `YOUR_GITHUB_USERNAME`:
 
 ```toml
-# fly.toml — task-manager API
+# fly.toml — Task Manager API (production)
 app = "task-manager-api"
 primary_region = "sin"   # Singapore — change to your nearest: lax, ord, fra, nrt
 
@@ -216,35 +247,17 @@ primary_region = "sin"   # Singapore — change to your nearest: lax, ord, fra, 
 [env]
   PORT = "8000"
   ENVIRONMENT = "production"
-  OTEL_ENABLED = "false"   # enable when you want production observability
+  OTEL_ENABLED = "false"   # enable when you have an OTLP collector configured
 
 [deploy]
   release_command = "alembic upgrade head"   # run migrations before traffic switches
 
 [[services]]
   internal_port = 8000
-  protocol = "tcp"
+  ...
 
-  [[services.ports]]
-    handlers = ["http"]
-    port = 80
-    force_https = true
-
-  [[services.ports]]
-    handlers = ["tls", "http"]
-    port = 443
-
-  [services.concurrency]
-    type = "connections"
-    hard_limit = 25
-    soft_limit = 20
-
-[[services.http_checks]]
-  interval = "10s"
-  timeout = "5s"
-  grace_period = "30s"
-  method = "GET"
-  path = "/health"
+  [[services.http_checks]]
+    path = "/health"
 ```
 
 Ask Claude Code:
@@ -261,7 +274,7 @@ SECRET_KEY=$(python3 -c "import secrets; print(secrets.token_hex(32))")
 # Set secrets in Fly.io (these are encrypted at rest, not visible in logs)
 flyctl secrets set \
   SECRET_KEY="$SECRET_KEY" \
-  ENVIRONMENT="production" \
+  CORS_ORIGINS="https://task-manager-frontend.fly.dev" \
   --app task-manager-api
 
 # Verify which secrets are set (values are masked)
@@ -271,16 +284,18 @@ flyctl secrets list --app task-manager-api
 Ask Claude Code:
 > "Why should the production `SECRET_KEY` be different from the one in `.env`? What would happen if an attacker obtained the production `SECRET_KEY`?"
 
-### 4. Create the CD workflow
+### 4. Read and understand the CD workflow
 
-Add a `deploy` job to `publish.yml` that runs after the images are published:
+Open `.github/workflows/publish.yml` and find the `deploy-fly-staging` and `deploy-fly-production` jobs. They are gated by `if: false` — you'll enable them in Module 16 once the Fly.io environments are configured.
+
+The production deploy job structure (shown for reference):
 
 ```yaml
-  deploy:
-    name: Deploy to Fly.io
-    needs: [publish-api, publish-frontend]
+  deploy-fly-production:
+    name: Promote to Fly.io production
+    needs: [deploy-fly-staging]    # only runs if staging passed
     runs-on: ubuntu-latest
-    environment: production       # GitHub Environment — requires manual approval
+    environment: production        # GitHub Environment — requires manual approval
 
     steps:
       - uses: actions/checkout@v4
@@ -288,25 +303,37 @@ Add a `deploy` job to `publish.yml` that runs after the images are published:
       - name: Install flyctl
         uses: superfly/flyctl-actions/setup-flyctl@master
 
-      - name: Deploy API to Fly.io
-        run: flyctl deploy --app task-manager-api --image ghcr.io/${{ github.repository }}/api:sha-${{ github.sha }}
+      - name: Deploy same image to production
+        run: |
+          flyctl deploy \
+            --app task-manager-api \
+            --image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/api:${{ env.IMAGE_TAG }}
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
-      - name: Verify health check
+      - name: Production health check
         run: |
           for i in $(seq 1 12); do
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://task-manager-api.fly.dev/health)
+            STATUS=$(curl -sf -o /dev/null -w "%{http_code}" \
+              "https://task-manager-api.fly.dev/health")
             echo "Attempt $i: HTTP $STATUS"
-            [ "$STATUS" = "200" ] && echo "✅ Health check passed" && exit 0
+            [ "$STATUS" = "200" ] && echo "✅ Production healthy" && exit 0
             sleep 10
           done
-          echo "❌ Health check failed after 120 s — rolling back"
+          echo "❌ Production health check failed — rolling back"
           flyctl releases rollback --app task-manager-api
           exit 1
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      - name: Production smoke test
+        run: |
+          docker run --rm grafana/k6 run \
+            -e BASE_URL=https://task-manager-api.fly.dev \
+            - < load-tests/k6/smoke.js
 ```
+
+Note: the `if: false` guard in publish.yml means these jobs are **disabled until you complete Module 16**. The deploy is split into staging (automatic) → production (manual approval). You're not expected to enable this now.
 
 Add the `FLY_API_TOKEN` as a GitHub repository secret:
 ```bash
@@ -399,33 +426,232 @@ Ask Claude Code:
 
 If the smoke test fails, the deploy job exits non-zero and GitHub marks the deployment as failed — giving you a clear signal to investigate before any further changes go out.
 
+> **DAST gate:** After the API image deploys to staging, a ZAP baseline scan can run as the next pipeline step — catching new security regressions before production promotion. See **Module 12 §10** for the exact `zaproxy/action-baseline@v0.12.0` GitHub Actions syntax and the tradeoff between passive baseline (2–5 min) and full active scan (10–30 min, destructive).
+
+### 9. Add semantic release tagging
+
+`sha-abc1234` image tags are great for traceability, but you also need human-readable version tags (`v0.1.0`) so you can answer "what is in production right now?" in a post-mortem.
+
+The `publish.yml` workflow already includes a `tag-release` job that reads the version from `backend/pyproject.toml` and creates a GitHub Release if that tag doesn't yet exist. To use it:
+
+**Step 1 — Bump the version in `backend/pyproject.toml`:**
+```toml
+[project]
+name = "task-manager"
+version = "0.2.0"   # bump this before merging a release
+```
+
+**Step 2 — Update `CHANGELOG.md`:** move items from `[Unreleased]` into a new `[0.2.0]` section.
+
+**Step 3 — Merge to `main`.** The `tag-release` job will:
+1. Read `version = "0.2.0"` from `pyproject.toml`
+2. Check whether the git tag `v0.2.0` already exists
+3. If not: create a GitHub Release with the title `Release v0.2.0` and a note showing which API image SHA was included
+
+Verify in GitHub: **Code → Tags** and **Releases** — `v0.2.0` should appear linked to the commit.
+
+Ask Claude Code:
+> "The `tag-release` job reads version from `backend/pyproject.toml` but `frontend/package.json` also has a version field. Should they stay in sync? What would break if the frontend version was 0.1.0 while the API was 0.2.0?"
+
+### 10. Understand SLSA provenance and image signing (Going Further)
+
+**SLSA** (Supply-chain Levels for Software Artifacts, pronounced "salsa") is a framework for verifying that your build artifacts were produced by your CI system and not tampered with.
+
+The current pipeline already covers SLSA Level 1 (provenance via SBOM + SHA-tagged images). Level 3 adds cryptographic attestations — the `slsa-provenance` job in `.github/workflows/publish.yml` implements this:
+
+```yaml
+slsa-provenance:
+  needs: [publish-api, publish-frontend]
+  permissions:
+    id-token: write      # required for keyless signing via Sigstore
+    packages: write      # required to push attestation to GHCR
+  uses: slsa-framework/slsa-github-generator/.github/workflows/generator_container_slsa3.yml@v2.1.0
+  with:
+    image: ghcr.io/${{ github.repository }}/api
+    digest: ${{ needs.publish-api.outputs.image }}
+```
+
+This signs the image with [Sigstore Cosign](https://docs.sigstore.dev/) and produces an attestation stored alongside the image in GHCR. Consumers can verify:
+```bash
+cosign verify-attestation --type slsaprovenance ghcr.io/your-repo/api:sha-abc1234
+```
+
+**Supply chain verification at deploy time** — the provenance is generated but never verified unless you add an explicit check. Add this step to your `deploy-fly-production` job to confirm the image you're about to ship was actually built by your GitHub Actions workflow, not a tampered image:
+
+```bash
+# Verify supply chain: image must have a valid SLSA attestation from our workflow
+cosign verify \
+  ghcr.io/YOUR_ORG/task-manager-api:sha-${{ github.sha }} \
+  --certificate-identity-regexp "https://github.com/YOUR_REPO/.*" \
+  --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
+```
+
+This check fails if:
+- The image was pushed outside of GitHub Actions (no attestation)
+- The attestation was generated by a different repository (certificate identity mismatch)
+- The signing certificate has expired (Sigstore uses ephemeral certs valid for ~10 minutes)
+
+Ask Claude Code:
+> "What is the difference between SLSA provenance and an SBOM (Software Bill of Materials)? The project already generates a CycloneDX SBOM — what additional security property does an SLSA attestation provide?"
+
+---
+
+## Going Further: Progressive Delivery
+
+The current pipeline does an all-or-nothing deploy — 100% of traffic switches to the new version at once. **Progressive delivery** decouples the act of deploying a new binary from releasing it to users, reducing the blast radius of a bad deploy.
+
+### Feature flags
+
+Decouple deploy from release without touching the pipeline. Gate new features behind an environment variable:
+
+```python
+# backend/app/config.py
+enable_comments_api: bool = Field(default=True)
+```
+
+Set `ENABLE_COMMENTS_API=false` in your secret store to hide the endpoint without a new deploy. Tools like [Unleash](https://getunleash.io/) or [LaunchDarkly](https://launchdarkly.com/) replace env vars with a managed flag service that supports percentage rollouts, A/B testing, and instant kill switches.
+
+### Canary deployments (Fly.io native)
+
+Route a fraction of traffic to the new version while keeping the old version live:
+
+```toml
+# fly.toml
+[deploy]
+  strategy = "canary"
+```
+
+Fly.io sends 10% of requests to the new revision. If health checks pass for the window, it completes the rollout. If they fail, it rolls back automatically — you never risk a full outage.
+
+### Blue-green deployments
+
+Keep the old revision fully live while the new revision warms up and passes smoke tests. Then switch the load balancer target atomically:
+
+```bash
+flyctl deploy --strategy bluegreen
+```
+
+No in-flight requests are dropped: the old (blue) revision continues to serve until the new (green) revision is ready and all in-flight requests complete.
+
+Ask Claude Code:
+> "Compare the risk profile of a canary deploy vs a blue-green deploy for this API. If a bad migration runs during a canary deploy, what happens to the 90% of traffic still on the old version?"
+
 ---
 
 ## Deployment Pipeline Summary
 
+```mermaid
+flowchart TD
+    main["Merge to main"]
+    api["publish-api\nbuild multi-stage image\npush to GHCR :sha-abc1234"]
+    fe["publish-frontend\nbuild React → nginx image\npush to GHCR :sha-abc1234"]
+    deploy["deploy\nneeds: publish-api + publish-frontend\n[manual approval gate]"]
+    fly["flyctl deploy --image :sha-abc1234"]
+    mig["release_command: alembic upgrade head"]
+    traffic["traffic switches to new version"]
+    health["health check loop\n10 attempts × 10 s"]
+    smoke["k6 smoke test\nhttps://...fly.dev"]
+    done(["✅ deployment complete"])
+    rollback(["❌ auto-rollback"])
+
+    main --> api & fe
+    api & fe --> deploy
+    deploy --> fly --> mig --> traffic --> health --> smoke --> done
+    health -->|fails| rollback
+    smoke -->|fails| rollback
 ```
-Merge to main
-    │
-    ├─ publish-api ──────────────────────┐
-    │   build multi-stage Docker image   │
-    │   push to GHCR :sha-abc1234        │
-    │                                    ├─ deploy (needs both)
-    ├─ publish-frontend ─────────────────┘   │
-    │   build React → nginx image            │  [manual approval gate]
-    │   push to GHCR :sha-abc1234            │
-    │                                    flyctl deploy --image :sha-abc1234
-    │                                        │
-    │                                    release_command: alembic upgrade head
-    │                                        │
-    │                                    traffic switches to new version
-    │                                        │
-    │                                    health check loop (10 attempts × 10 s)
-    │                                        │
-    │                                    k6 smoke test → https://...fly.dev
-    │                                        │
-    │                                    ✅ deployment complete
-    │                                    ❌ auto-rollback if health/smoke fails
+
+---
+
+## Cloud Target: Azure Container Apps (Aspire-native)
+
+Azure is the most integrated Aspire deployment path. The entire infrastructure is provisioned automatically from the Aspire manifest — no manual resource creation needed.
+
+### How azd + Aspire works
+
+```mermaid
+flowchart LR
+    program["Program.cs\n(Aspire AppHost)"]
+    manifest["Aspire manifest\n(generated by azd)"]
+    provision["azd provision\nACA Environment\nACR · PostgreSQL\nKey Vault"]
+    deploy["azd deploy\nbuild images → ACR\nupdate Container App\nrevisions"]
+    hook["azure.yaml hook\nalembic upgrade head"]
+
+    program --> manifest --> provision --> deploy --> hook
 ```
+
+### Quick start
+
+```bash
+# One-time setup
+dotnet workload install aspire
+npm install -g @azure/azd   # or: brew install azd
+
+# Authenticate
+az login
+azd auth login
+
+# First deployment (provisions infra + deploys)
+azd up
+
+# Subsequent deployments (deploy only)
+azd deploy
+```
+
+`azd up` prompts for:
+- **Environment name** (e.g. `task-manager-prod`) — stored in `.azure/<env>/.env`
+- **Azure location** (e.g. `australiaeast`, `eastasia`)
+- **Subscription** — picked from your authenticated subscriptions
+
+It then reads `azure.yaml` → finds the Aspire AppHost → generates the manifest → provisions ACA Environment, ACR, Azure Database for PostgreSQL, and Key Vault → builds and pushes images to ACR → updates Container App revisions.
+
+### Connect GitHub Actions
+
+```bash
+# Configures OIDC trust and writes GitHub secrets automatically:
+azd pipeline config
+```
+
+This runs `az ad app create` to set up federated credentials, then writes `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` to your GitHub repository secrets. After this, the `deploy-azure` job in `publish.yml` (currently gated by `if: false`) can be enabled.
+
+### Secrets management
+
+Azure Key Vault is provisioned automatically. The `SECRET_KEY`, `DATABASE_URL`, and `CORS_ORIGINS` values are stored as Key Vault secrets and injected into the Container App at runtime — they never appear in `azure.yaml` or any committed file.
+
+```bash
+# View or update a secret:
+azd env set SECRET_KEY "$(openssl rand -hex 32)"
+azd deploy   # re-deploys with the updated secret
+```
+
+Ask Claude Code:
+> "What is the difference between `azd provision` and `azd deploy`? When would you run each one separately instead of using `azd up`? What happens if you run `azd provision` on an environment that already has infrastructure?"
+
+---
+
+## Cloud Target: AWS ECS Fargate and GCP Cloud Run
+
+For AWS and GCP, the Aspire AppHost still provides value even though `azd` doesn't have native publishers for these platforms.
+
+### The Aspire manifest as source of truth
+
+Every merge to `main` generates the Aspire manifest:
+
+```bash
+dotnet run --project aspire/TaskManager.AppHost \
+  -- --publisher manifest --output-path aspire-manifest.json
+```
+
+The manifest is uploaded as a 90-day build artifact (`aspire-manifest-<sha>`). It documents:
+- Every container the application needs to run
+- Every environment variable each container requires
+- Every parameter that differs between environments (secrets, CORS origins)
+- Inter-service dependencies (`WaitFor`, endpoint references)
+
+The ECS task definitions in `aws/ecs/` and the Cloud Run YAMLs in `infra/gcp/` should be consistent with this manifest. When you add a new env var to the Aspire AppHost, update the corresponding cloud config files to match.
+
+Ask Claude Code:
+> "Download the Aspire manifest artifact from the latest main branch workflow run. Compare the env vars listed under the `api` resource against `aws/ecs/api-task.json`. Are there any gaps?"
 
 ---
 
@@ -433,11 +659,13 @@ Merge to main
 
 | Environment | Trigger | Approval | Database |
 |-------------|---------|----------|---------|
-| Local | `docker compose up` | None | Local PostgreSQL |
-| CI | Every push | None | SQLite in-memory |
-| Production | Merge to `main` | Manual (GitHub Environment) | Fly.io managed PostgreSQL |
+| Local (Aspire) | `dotnet run --project aspire/TaskManager.AppHost` | None | Local PostgreSQL (Aspire-managed) |
+| Local (Docker) | `docker compose up` | None | Local PostgreSQL |
+| CI | Every push | None | PostgreSQL 16 (GitHub Actions `services:` container) |
+| Staging | Merge to `main` | None (auto) | Managed PostgreSQL — enabled in Module 16 |
+| Production | Merge to `main` | Manual (GitHub Environment) | Managed PostgreSQL — enabled in Module 16 |
 
-This lab uses two environments (local + production). A real team typically adds **staging** — a production-like environment that receives every `main` merge automatically, with production requiring an additional manual promotion.
+This lab starts with local + production. Module 16 adds the **staging** environment — a production-like environment that receives every `main` merge automatically, with production requiring an additional manual promotion from a named reviewer.
 
 Ask Claude Code:
 > "Design a three-environment pipeline (dev/staging/production) for this project. What would change in the GitHub Actions workflows? What would the database strategy be for staging?"
@@ -446,18 +674,21 @@ Ask Claude Code:
 
 ## Checkpoint
 
+- [ ] `backend/.dockerignore` and `frontend/.dockerignore` committed — build context excludes `.venv`, `node_modules/`, `tests/`, `.env` (Setup 2)
 - [ ] `backend/Dockerfile` is a two-stage production build with a non-root user
 - [ ] `frontend/Dockerfile` is a two-stage build producing an nginx image
 - [ ] Both images build successfully with `docker build`
-- [ ] `.github/workflows/publish.yml` publishes images to GHCR on merge to `main`
-- [ ] Images are visible in your GitHub repo under **Packages**
-- [ ] `fly.toml` has `release_command = "alembic upgrade head"`
-- [ ] Production `SECRET_KEY` is set via `flyctl secrets set` (not in any file)
+- [ ] `.github/workflows/publish.yml` publish jobs pass on a merge to `main`
+- [ ] Trivy scan passes — no CRITICAL or HIGH CVEs in either image
+- [ ] Images are visible in your GitHub repo under **Packages** with `sha-<commit>` tags
+- [ ] GitHub Release `v0.1.0` visible under **Code → Releases** with the correct image SHA in the notes (Activity 9)
+- [ ] `CHANGELOG.md` updated — `[0.1.0]` section moved from `[Unreleased]` and dated (Activity 9)
+- [ ] `fly.toml` exists at project root with `release_command = "alembic upgrade head"`
+- [ ] Production `SECRET_KEY` and `CORS_ORIGINS` set via `flyctl secrets set` (not in any file)
 - [ ] `FLY_API_TOKEN` is set as a GitHub repository secret
-- [ ] `deploy` job runs after `publish-api` and `publish-frontend` and requires approval
-- [ ] Post-deploy health check passes; auto-rollback triggers if it fails
-- [ ] k6 smoke test runs against the live Fly.io URL
-- [ ] Commit: `feat(cd): add production Dockerfiles, GHCR publish, and Fly.io deploy pipeline`
+- [ ] `deploy-fly-staging` and `deploy-fly-production` jobs exist in publish.yml (gated by `if: false` until Module 16)
+- [ ] Post-deploy health check and smoke test are wired; auto-rollback triggers if either fails
+- [ ] Commit: `feat(cd): add production Dockerfiles, dockerignore, GHCR publish, release tagging, and Fly.io deploy pipeline`
 
 ---
 
@@ -470,4 +701,5 @@ Ask Claude Code:
 | Health check fails after deploy | App crashed at startup | `flyctl logs --app task-manager-api` to see the error |
 | GHCR push denied | `packages: write` permission missing | Verify the `permissions:` block in the publish job |
 | Frontend shows 404 on page refresh | nginx config missing `try_files` directive | Add `try_files $uri $uri/ /index.html;` to the nginx location block |
-| Image not found during deploy | SHA tag doesn't match | Ensure `${{ github.sha }}` matches between publish and deploy jobs |
+| Image not found during deploy | SHA tag mismatch | Confirm `type=sha,format=long` in metadata-action — `format=short` produces 7-char tags that don't match `sha-${{ github.sha }}` |
+| CORS error in production | `CORS_ORIGINS` secret not set | `flyctl secrets set CORS_ORIGINS="https://your-frontend.fly.dev"` |

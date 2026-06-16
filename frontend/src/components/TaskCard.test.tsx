@@ -49,4 +49,23 @@ describe("TaskCard", () => {
     render(<TaskCard task={task} onStatusChange={vi.fn()} />);
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
   });
+
+  it("shows '→ In Review' button for IN_PROGRESS task", () => {
+    const task: Task = { ...baseTask, status: "IN_PROGRESS" };
+    render(<TaskCard task={task} onStatusChange={vi.fn()} />);
+    expect(screen.getByText("→ In Review")).toBeInTheDocument();
+  });
+
+  it("calls onStatusChange with DONE when '→ Done' is clicked on IN_REVIEW task", () => {
+    const onStatusChange = vi.fn();
+    const task: Task = { ...baseTask, status: "IN_REVIEW" };
+    render(<TaskCard task={task} onStatusChange={onStatusChange} />);
+    fireEvent.click(screen.getByText("→ Done"));
+    expect(onStatusChange).toHaveBeenCalledWith(1, "DONE");
+  });
+
+  it("shows '→ Cancelled' button for TODO task", () => {
+    render(<TaskCard task={baseTask} onStatusChange={vi.fn()} />);
+    expect(screen.getByText("→ Cancelled")).toBeInTheDocument();
+  });
 });
