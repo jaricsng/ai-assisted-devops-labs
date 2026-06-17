@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+---
+
+## [1.0.0] — 2026-06-17
+
 ### Added
 - `task_status_transitions_total` Prometheus counter (labelled `from_status`/`to_status`) emitted in `task_service.py` on every status change — closes observability gap for state-machine throughput
 - Environment field in `GET /health` response (`{"status": "ok", "environment": "production"}`) so operators can confirm which deployment they are connected to
@@ -24,26 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `MishaKav/pytest-coverage-comment@v1.10.0` step in CI backend job — posts coverage delta as a PR comment on every pull request
 - SLSA Level 3 provenance attestation job in `publish.yml` (`slsa-framework/slsa-github-generator`) — generates signed build provenance pushed to GHCR alongside the API image
 - Slack failure notification job in `publish.yml` — fires on any job failure on `main`; uses `env:` to pass context safely (no shell injection risk); skips gracefully if `SLACK_WEBHOOK_URL` is unset
-- `docs/threat-model.md` — comprehensive STRIDE threat model with 23 threats, DFD, mitigation status table, residual risk register, and controls summary
 - `.github/workflows/drift-detection.yml` — nightly workflow (+ manual trigger) that detects staging image/version drift and OpenAPI schema drift between `docs/api/openapi.yaml` and the live API contract; posts Slack alert on divergence
-
-### Fixed
-- `load-tests/k6/load.js` — duplicate `http_req_duration` threshold key silently dropped the `p(95)<500` gate; fixed to single key with `["p(95)<650", "p(99)<1000"]`
-- `backend/tests/test_auth_integration.py` — `user_payload` fixture used hardcoded `alice@example.com`; changed to `alice_<uuid8>@example.com` to prevent 409 Conflict on repeated test runs against a persistent DB
-
-### Changed
-- k6 load test thresholds calibrated with ~20% headroom for local Docker variance
-- k6 smoke/load/spike scripts extended with `get_task`, `list_comments`, `cancel_transition`, `/ready` probe, and `get_project_detail` steps to cover more of the API surface
-
----
-
-## [Unreleased — previous]
-
-### Added
 - Alembic database migrations (`backend/alembic/`) promoted to main project — two migrations: `001_initial_schema` and `002_add_soft_deletes`
 - Disaster recovery runbook (`docs/runbooks/disaster-recovery.md`) — RTO/RPO targets, backup/restore procedures, GDPR purge schedule, post-mortem template
 - Incident runbooks section in `docs/operations.md` — crash-loop, DB unreachable, Alembic failure, rate-limit reset, observability troubleshooting
-- Grafana alerting rules corrected to use actual OTel metric name `http_server_duration_milliseconds` (was `http_requests_total` which did not exist)
 - `CODEOWNERS` — automatic reviewer assignment for security-sensitive paths
 - `CHANGELOG.md` (this file)
 - `.editorconfig` — consistent editor settings across contributors
@@ -53,10 +41,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `solution/docs/adr/0006-rate-limiting.md` — student-example ADR for the rate limiting decision
 
 ### Fixed
+- `load-tests/k6/load.js` — duplicate `http_req_duration` threshold key silently dropped the `p(95)<500` gate; fixed to single key with `["p(95)<650", "p(99)<1000"]`
+- `backend/tests/test_auth_integration.py` — `user_payload` fixture used hardcoded `alice@example.com`; changed to `alice_<uuid8>@example.com` to prevent 409 Conflict on repeated test runs against a persistent DB
+- Grafana alerting rules corrected to use actual OTel metric name `http_server_duration_milliseconds` (was `http_requests_total` which did not exist)
 - `solution/docs/adr/0004-security-controls.md` — corrected "six" → "seven" security headers; added `Cache-Control: no-store` row
 - `docs/adr/0003-security-controls.md` — same fix applied to canonical project ADR
 - Grafana alerting rules: `HighLatency` threshold corrected from `> 0.5` (seconds) to `> 500` (milliseconds) to match the OTel millisecond histogram unit
 - `backend/app/main.py` — added comment clarifying production deployments must run `alembic upgrade head`
+
+### Changed
+- k6 load test thresholds calibrated with ~20% headroom for local Docker variance
+- k6 smoke/load/spike scripts extended with `get_task`, `list_comments`, `cancel_transition`, `/ready` probe, and `get_project_detail` steps to cover more of the API surface
 
 ---
 
@@ -121,5 +116,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-[Unreleased]: https://github.com/jaricsng/task-manager/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/jaricsng/ai-assisted-devops-labs/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/jaricsng/ai-assisted-devops-labs/releases/tag/v1.0.0
 [0.1.0]: https://github.com/jaricsng/task-manager/releases/tag/v0.1.0
