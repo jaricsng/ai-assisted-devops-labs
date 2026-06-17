@@ -61,7 +61,9 @@ resource "random_password" "db_password" {
 # Store the connection string in Secret Manager (never in state as plaintext)
 resource "google_secret_manager_secret" "database_url" {
   secret_id = "${local.name_prefix}-database-url"
-  replication { auto {} }
+  replication {
+    auto {}
+  }
   labels = local.labels
 }
 
@@ -174,7 +176,9 @@ resource "google_cloud_run_v2_service" "api" {
 
 resource "google_secret_manager_secret" "secret_key" {
   secret_id = "${local.name_prefix}-secret-key"
-  replication { auto {} }
+  replication {
+    auto {}
+  }
   labels = local.labels
 }
 
