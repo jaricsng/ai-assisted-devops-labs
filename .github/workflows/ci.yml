@@ -293,7 +293,7 @@ jobs:
         # Set soft_fail: false to hard-gate on HIGH+ findings.
         uses: aquasecurity/tfsec-action@v1.0.0
         with:
-          working_directory: infra/terraform
+          working_directory: solution/infra/terraform
           soft_fail: true
 
       - name: Authenticate to GCP (Workload Identity — keyless)
@@ -307,7 +307,7 @@ jobs:
 
       - name: Terraform init
         run: terraform init
-        working-directory: infra/terraform/environments/staging
+        working-directory: solution/infra/terraform/environments/staging
         continue-on-error: true   # non-blocking until GCP is configured
 
       - name: Terraform plan
@@ -316,7 +316,7 @@ jobs:
           terraform plan -no-color \
             -var="image_tag=sha-${{ github.sha }}" \
             -var="secret_key=placeholder"
-        working-directory: infra/terraform/environments/staging
+        working-directory: solution/infra/terraform/environments/staging
         continue-on-error: true   # plan output is informational on PRs
 
       - name: Post plan as PR comment
