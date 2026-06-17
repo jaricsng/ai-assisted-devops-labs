@@ -60,7 +60,7 @@ jobs:
           OTEL_ENABLED: "false"
 
       - name: Coverage PR comment
-        uses: MishaKav/pytest-coverage-comment@v1.10.0
+        uses: MishaKav/pytest-coverage-comment@v1.7.2
         if: github.event_name == 'pull_request'
         with:
           pytest-coverage-path: backend/coverage.xml
@@ -291,7 +291,7 @@ jobs:
         # Static analysis of all Terraform HCL — no cloud credentials required.
         # soft_fail: true means findings are reported but do not fail the build.
         # Set soft_fail: false to hard-gate on HIGH+ findings.
-        uses: aquasec/tfsec-action@v1.0.0
+        uses: aquasecurity/tfsec-action@v1.0.0
         with:
           working_directory: infra/terraform
           soft_fail: true
