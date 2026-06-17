@@ -23,13 +23,17 @@
 
 All three are active in this lab. Grafana is the unified front-end that reads from both Prometheus and Jaeger.
 
-```
-FastAPI
-  └─ FastAPIInstrumentor  ──────────────────────────────────────►  /metrics (Prometheus format)
-  └─ SQLAlchemyInstrumentor                                               │
-        │                                                         Prometheus scrapes
-        └─ TracerProvider ──► BatchSpanProcessor ──► Jaeger               │
-                                  (OTLP gRPC :4317)         Grafana reads both
+```mermaid
+flowchart LR
+    FastAPI --> FI["FastAPIInstrumentor"]
+    FastAPI --> SI["SQLAlchemyInstrumentor"]
+    FI --> metrics["/metrics\n(Prometheus format)"]
+    SI --> TP["TracerProvider"]
+    TP --> BSP["BatchSpanProcessor\n(OTLP gRPC :4317)"]
+    BSP --> Jaeger
+    metrics -->|scrapes| Prometheus
+    Jaeger -->|reads| Grafana
+    Prometheus -->|reads| Grafana
 ```
 
 ---
@@ -87,7 +91,7 @@ The observability services (Jaeger, Prometheus, Grafana) run under a Docker Comp
 docker compose --profile observability up
 ```
 
-This starts six containers:
+This starts seven containers:
 
 | Container | URL | Purpose |
 |-----------|-----|---------|
@@ -97,18 +101,20 @@ This starts six containers:
 | `jaeger` | http://localhost:16686 | Trace storage + UI |
 | `prometheus` | http://localhost:9090 | Metrics storage + UI |
 | `grafana` | http://localhost:3000 | Unified dashboard (admin/admin) |
+| `blackbox-exporter` | http://localhost:9115 | External endpoint prober (powers the `DatabaseUnreachable` Grafana alert) |
 
 Wait for all containers to be healthy, then generate some traffic:
 
 ```bash
 # Register a user and get a token
+# Password must be 8+ chars with at least one uppercase letter and one digit
 curl -s -X POST http://localhost:8000/auth/register \
   -H "Content-Type: application/json" \
-  -d '{"email":"obs@example.com","full_name":"Obs User","password":"password123"}'
+  -d '{"email":"obs@example.com","full_name":"Obs User","password":"Obs1234!"}'
 
 TOKEN=$(curl -s -X POST http://localhost:8000/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"email":"obs@example.com","password":"password123"}' \
+  -d '{"email":"obs@example.com","password":"Obs1234!"}' \
   | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
 
 # Create a project and task
@@ -257,21 +263,101 @@ This is **log-trace correlation** — moving between the log system and the trac
 Ask Claude Code:
 > "In a microservices architecture where the frontend calls the API which calls an external payment service, how would the trace_id flow through all three systems? What HTTP header is standardised for this?"
 
-### 7. Add a custom business metric
+### 7. Add custom business metrics
 
-The OTel SDK can emit custom metrics beyond the auto-instrumented HTTP ones. Add a counter for task status transitions:
+There are two ways to add custom metrics to this project. Understanding both teaches you when each is appropriate.
 
-Ask Claude Code:
-> "Add a custom OpenTelemetry counter named `task_status_transitions_total` to app/services/task_service.py. The counter should have attributes: `from_status` and `to_status`. Use the global MeterProvider. Increment it each time a task status changes successfully."
+#### Approach A — Direct `prometheus_client` Counter (for application-level business events)
 
-After implementing, move a task through several statuses, then query Prometheus:
-```promql
-task_status_transitions_total
+The `prometheus_client` library lets you define counters that are served directly by the `/metrics` endpoint — no OTel pipeline needed. Use this for **business-level counters** that represent meaningful domain events (tasks created, users registered, projects deleted).
+
+Create `backend/app/business_metrics.py`:
+
+```python
+from prometheus_client import Counter
+
+tasks_created_total = Counter(
+    "tasks_created_total",
+    "Total number of tasks successfully created",
+)
+
+projects_created_total = Counter(
+    "projects_created_total",
+    "Total number of projects successfully created",
+)
 ```
 
-Verify the counter appears in the Prometheus UI and in Grafana's Explore view.
+Then increment the counter in the router after a successful creation:
 
-### 8. Understand the liveness vs. readiness probes
+```python
+# backend/app/routers/tasks.py
+from app.business_metrics import tasks_created_total
+
+# ... inside create_task(), after task_repository.create():
+logger.info("audit", action="TASK_CREATED", resource="task", resource_id=task.id)
+tasks_created_total.inc()
+return task
+```
+
+After implementing, create a task and verify the counter in Prometheus:
+```promql
+tasks_created_total
+```
+
+Watch it increment in real time as you create more tasks:
+```promql
+rate(tasks_created_total[5m])
+```
+
+#### Approach B — OTel Counter (for infrastructure-level spans and metrics)
+
+The OTel SDK adds custom metrics to the same pipeline as the auto-instrumented spans. Use this when you want metrics that correlate with trace spans and carry OTel attributes.
+
+Ask Claude Code:
+> "Add a custom OpenTelemetry counter named `task_status_transitions_total` to `app/services/task_service.py`. The counter should have attributes: `from_status` and `to_status`. Use the global MeterProvider. Increment it each time a task status changes successfully."
+
+> **Reference implementation:** `task_status_transitions_total` is implemented as a `prometheus_client.Counter` in `backend/app/business_metrics.py` and incremented in `backend/app/services/task_service.py::apply_task_update()` after every successful status transition. It's tested in `backend/tests/test_observability.py::test_task_status_transitions_counter_in_metrics`.
+
+#### When to use each
+
+| Approach | Use when |
+|----------|----------|
+| `prometheus_client.Counter` | Domain events you want to count forever (all-time totals, business KPIs) |
+| OTel `MeterProvider` | Infrastructure metrics you want correlated with trace spans and OTel attributes |
+
+Ask Claude Code:
+> "The project now has two types of custom metrics: `prometheus_client.Counter` in `business_metrics.py` and OTel counters in the service layer. Both appear at `/metrics`. What is the difference between them at the Prometheus level? Is there any risk of naming collision?"
+
+### 8. Explore the pre-provisioned Grafana alert rules
+
+The observability stack ships with four alert rules in `observability/grafana/provisioning/alerting/rules.yaml`. Open Grafana → **Alerting → Alert Rules** to see them:
+
+| Alert | Condition | Severity |
+|-------|-----------|----------|
+| `HighErrorRate` | 5xx rate > 5% for 5 min | Critical |
+| `HighLatency` | P95 > 500 ms for 5 min | Warning |
+| `DatabaseUnreachable` | `/ready` probe fails for 1 min | Critical |
+| `HighRejectionRate` | 429 rate > 50/min for 2 min | Warning (brute-force signal) |
+
+The `DatabaseUnreachable` alert works through the **Prometheus Blackbox Exporter** — a separate container that probes `http://api:8000/ready` and exposes the result as the metric `probe_success{job="readiness"}`. Prometheus scrapes the Blackbox Exporter, and Grafana fires the alert when `probe_success == 0` for more than 1 minute.
+
+Trigger the alert manually to verify the pipeline works:
+
+```bash
+# Stop the DB — /ready will return 503 within seconds
+docker compose stop db
+```
+
+Wait 60 seconds, then check Grafana → **Alerting → Alert Rules** — `DatabaseUnreachable` should enter **Firing** state. Restart the DB to resolve it:
+
+```bash
+docker compose up db -d
+```
+
+Ask Claude Code:
+> "Why is a separate Blackbox Exporter needed to power the DatabaseUnreachable alert? Why can't Prometheus just scrape /ready directly and alert on the HTTP status code?"
+
+### 9. Understand the liveness vs. readiness probes
 
 Stop the database while the API is still running:
 
@@ -293,7 +379,7 @@ docker compose up db -d
 Ask Claude Code:
 > "In Kubernetes, what is the difference between a liveness probe, a readiness probe, and a startup probe? When would you use all three on the same container?"
 
-### 9. Add user context to logs
+### 10. Add user context to logs
 
 The middleware logs every request, but not who made it. Add the authenticated user's ID to the structlog context:
 
@@ -301,6 +387,48 @@ Ask Claude Code:
 > "Update the `current_user` dependency in app/routers/deps.py to call `structlog.contextvars.bind_contextvars(user_id=str(current_user.id))` after resolving the user. This way every log line emitted during an authenticated request automatically includes the user ID."
 
 After implementing, make an authenticated request and verify `user_id` appears alongside `request_id` and `trace_id` on the `request_finished` log line.
+
+### 11. Synthetic monitoring with Blackbox Exporter
+
+Internal OTel metrics (histograms, counters) are emitted from inside the process. If the process crashes, the metric pipeline goes silent — you only know something is wrong when you notice the absence of data. **Synthetic monitoring** probes from outside the process, so a crash, network partition, or VM failure produces an explicit `probe_success = 0` rather than silence.
+
+The `blackbox-exporter` container is already running in the observability stack (Activity 1). It probes `http://api:8000/ready` on a schedule and exposes the result as a Prometheus metric:
+
+```bash
+# Query the Blackbox Exporter directly
+curl http://localhost:9115/probe?target=http://api:8000/ready&module=http_2xx
+# Key metrics in the response:
+#   probe_success 1        — probe passed (1) or failed (0)
+#   probe_duration_seconds — how long the probe took
+```
+
+Prometheus scrapes the Blackbox Exporter via the `blackbox` job in `observability/prometheus/prometheus.yml` — no additional config needed.
+
+**Add a `probe_success` panel to your Grafana dashboard:**
+
+1. Open Grafana → Dashboards → Task Manager API → Edit
+2. Add a new panel using the **Stat** visualization type
+3. Query:
+   ```promql
+   probe_success{job="readiness"}
+   ```
+4. Set thresholds: `0` → Red, `1` → Green
+5. Set the title to **Endpoint Availability (Blackbox)**
+6. Save the dashboard
+
+This panel shows at a glance whether the `/ready` endpoint is reachable from outside the API process. It is the probe that powers the `DatabaseUnreachable` alert — when `probe_success` drops to 0 for more than 60 seconds, the alert fires.
+
+**Why synthetic probes complement internal metrics:**
+
+| Signal source | What it catches | What it misses |
+|---------------|----------------|---------------|
+| OTel metrics (internal) | Slow queries, error rates, in-process crashes with graceful shutdown | Process that hard-crashes (no more metrics emitted) |
+| Blackbox Exporter (external) | Complete outage, network partition, port not listening | Internal slowdowns that don't fail the probe |
+
+Together they cover each other's blind spots.
+
+Ask Claude Code:
+> "The Blackbox Exporter probes `/ready` which tests DB connectivity. If the API process is up but the DB is down, `probe_success` will be 0. Design a second probe targeting `/health` (process-only). What PromQL alert rule would distinguish 'DB is down but API is alive' from 'entire API container is gone'?"
 
 ---
 
@@ -321,12 +449,17 @@ After implementing, make an authenticated request and verify `user_id` appears a
 
 ## Checkpoint
 
-- [ ] `docker compose --profile observability up` starts all six containers without errors
+- [ ] `docker compose --profile observability up` starts all seven containers without errors (including `blackbox-exporter`)
 - [ ] `curl http://localhost:8000/metrics` returns Prometheus text format (not JSON)
 - [ ] Prometheus **Status → Targets** shows `task-manager-api` as `UP`
 - [ ] Jaeger shows traces for your PATCH requests, including DB child spans
 - [ ] Grafana **Task Manager API** dashboard shows live metrics
 - [ ] You traced a log line to its Jaeger trace using the `trace_id` (Activity 6)
-- [ ] `pytest tests/test_observability.py` passes (OTel is disabled in tests; `/metrics` returns 404)
+- [ ] `tasks_created_total` counter visible in Prometheus; increments on `POST /projects/{id}/tasks` (Activity 7A)
+- [ ] `task_status_transitions_total` OTel counter visible in Prometheus with `from_status`/`to_status` labels (Activity 7B)
+- [ ] `pytest tests/test_observability.py` passes — two test modes are covered: (1) standard `client` fixture with `OTEL_ENABLED=false` (verifies `/metrics` returns 404 when OTel is not configured); (2) `otel_client` module-scoped fixture with OTel enabled (verifies `/metrics` returns 200 with Prometheus text format, and that `http_server_duration` and `task_status_transitions_total` metrics are present)
 - [ ] No secrets appear in any log line
-- [ ] Commit: `feat(observability): add OTel tracing + Prometheus metrics + Grafana dashboard`
+- [ ] Grafana alert rules are visible under **Alerting → Alert Rules** (all four rules shown)
+- [ ] `DatabaseUnreachable` alert fires when DB is stopped (Activity 8)
+- [ ] `probe_success{job="readiness"}` Stat panel added to Grafana dashboard — shows green (1) when `/ready` is healthy, red (0) when it fails (Activity 11)
+- [ ] Commit: `feat(observability): add OTel tracing + Prometheus metrics + business counters + Grafana dashboard + alerting + synthetic probe panel`

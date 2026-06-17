@@ -53,9 +53,12 @@
 
 ## 4. Security Finding I Wouldn't Have Caught Myself
 
-<!-- Describe a finding from /security-scan, /security-review, or /check-secrets
-     that you didn't notice on your own. What was it? How did you fix it (or why
-     did you accept the risk)? What would have happened if it had reached production? -->
+<!-- Describe a finding from any security tool: /security-scan, /security-review,
+     /check-secrets, /pen-test, /compliance-check, or the manual pen test script
+     (pen-tests/manual-checks.sh). What was it? How did you fix it (or why did
+     you accept the risk)? What would have happened if it had reached production?
+     If all tools passed, describe which finding surprised you most when you learned
+     what it was checking for. -->
 
 **Finding (tool and severity):**
 
@@ -73,7 +76,23 @@
 
 ---
 
-## 6. Best Practice I'll Carry Forward
+## 6. Load Testing: What the Numbers Revealed
+
+<!-- Describe what you learned from running the k6 smoke, load, or spike test.
+     What did the p95 latency or error rate tell you that you couldn't see from
+     unit tests or manual testing? Did any threshold fail? If so, what was the
+     root cause (DB query, pool exhaustion, slow middleware) and what did you
+     change? If all thresholds passed, what was the most surprising metric? -->
+
+**Scenario I ran (smoke / load / spike):**
+
+**What the numbers showed:**
+
+**What I changed (or why I accepted the result):**
+
+---
+
+## 7. Best Practice I'll Carry Forward
 
 <!-- One concrete habit or technique you'll apply in your next project.
      It should be specific — "run /security-scan before every PR" is specific;
@@ -81,11 +100,12 @@
 
 ---
 
-## 7. What I'd Improve
+## 8. What I'd Improve
 
 <!-- One architectural or process decision you'd make differently if you started again.
-     Why? What would you do instead? -->
+     Why? What would you do instead? Consider your ADRs — is there a decision you'd
+     revisit now that you've seen the full implementation and tested it under load? -->
 
 ---
 
-*Word count target: 400–600 words across all sections.*
+*Word count target: 600–900 words across all sections.*

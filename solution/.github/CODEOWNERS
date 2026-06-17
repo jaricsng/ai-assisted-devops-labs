@@ -1,0 +1,33 @@
+# CODEOWNERS — automatic reviewer assignment
+#
+# Patterns are evaluated top-to-bottom; the LAST matching rule wins.
+# Reference: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+#
+# Replace @YOUR_GITHUB_USERNAME with your actual GitHub handle throughout.
+
+# Default owner for everything not matched below
+*                                       @YOUR_GITHUB_USERNAME
+
+# Security-sensitive backend paths — changes here require security-aware review
+backend/app/middleware/               @YOUR_GITHUB_USERNAME
+backend/app/routers/auth.py           @YOUR_GITHUB_USERNAME
+backend/app/services/auth_service.py  @YOUR_GITHUB_USERNAME
+backend/app/routers/deps.py           @YOUR_GITHUB_USERNAME
+
+# Database migrations — irreversible in production without careful review
+backend/alembic/                      @YOUR_GITHUB_USERNAME
+
+# CI/CD pipelines — can execute arbitrary code in GitHub Actions runners
+.github/workflows/                    @YOUR_GITHUB_USERNAME
+.github/CODEOWNERS                    @YOUR_GITHUB_USERNAME
+
+# Infrastructure and cloud configs
+aws/                                  @YOUR_GITHUB_USERNAME
+infra/gcp/                            @YOUR_GITHUB_USERNAME
+aspire/                               @YOUR_GITHUB_USERNAME
+fly.toml                              @YOUR_GITHUB_USERNAME
+azure.yaml                            @YOUR_GITHUB_USERNAME
+
+# Security policy and pen test scripts
+SECURITY.md                           @YOUR_GITHUB_USERNAME
+pen-tests/                            @YOUR_GITHUB_USERNAME

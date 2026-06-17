@@ -1,0 +1,38 @@
+# Build outputs
+dist/
+.vite/
+
+# Test and dev artifacts
+coverage/
+e2e/
+playwright-report/
+test-results/
+*.spec.ts
+playwright.config.ts
+
+# Editor and OS artifacts
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Git history
+.git/
+.gitignore
+
+# CI artifacts
+.github/
+
+# Node package manager artifacts (installed fresh in Docker build)
+node_modules/
+.npm/
+.pnpm-store/
+
+# Local dev overrides
+docker-compose.yml
+docker-compose*.yml

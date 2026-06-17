@@ -1,10 +1,12 @@
 from datetime import datetime
-from pydantic import BaseModel
+from typing import Annotated
+
+from pydantic import BaseModel, StringConstraints
 
 
 class ProjectCreate(BaseModel):
-    name: str
-    description: str | None = None
+    name: Annotated[str, StringConstraints(min_length=1, max_length=255)]
+    description: Annotated[str | None, StringConstraints(max_length=2000)] = None
 
 
 class ProjectRead(BaseModel):

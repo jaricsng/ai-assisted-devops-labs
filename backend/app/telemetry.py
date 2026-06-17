@@ -15,6 +15,7 @@ Architecture:
                                                                │
                                                            Grafana reads
 """
+
 import structlog
 from opentelemetry import metrics, trace
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
@@ -65,7 +66,9 @@ def setup_telemetry(app, engine, otlp_endpoint: str) -> None:
     # library. The make_asgi_app() mounted at /metrics serves them in the
     # Prometheus text exposition format that Prometheus scrapes.
     prometheus_reader = PrometheusMetricReader()
-    meter_provider = MeterProvider(resource=resource, metric_readers=[prometheus_reader])
+    meter_provider = MeterProvider(
+        resource=resource, metric_readers=[prometheus_reader]
+    )
     metrics.set_meter_provider(meter_provider)
 
     # ── Auto-instrumentation ──────────────────────────────────────────────────

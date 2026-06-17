@@ -1,20 +1,22 @@
-from datetime import datetime, date
-from pydantic import BaseModel
+from datetime import date, datetime
+from typing import Annotated
 
-from app.models.task import TaskStatus, TaskPriority
+from pydantic import BaseModel, StringConstraints
+
+from app.models.task import TaskPriority, TaskStatus
 
 
 class TaskCreate(BaseModel):
-    title: str
-    description: str | None = None
+    title: Annotated[str, StringConstraints(min_length=1, max_length=255)]
+    description: Annotated[str | None, StringConstraints(max_length=2000)] = None
     priority: TaskPriority = TaskPriority.MEDIUM
     assignee_id: int | None = None
     due_date: date | None = None
 
 
 class TaskUpdate(BaseModel):
-    title: str | None = None
-    description: str | None = None
+    title: Annotated[str | None, StringConstraints(min_length=1, max_length=255)] = None
+    description: Annotated[str | None, StringConstraints(max_length=2000)] = None
     status: TaskStatus | None = None
     priority: TaskPriority | None = None
     assignee_id: int | None = None

@@ -27,3 +27,5 @@ We write the **OpenAPI 3.1 specification first** (`docs/api/openapi.yaml`) befor
 - Any endpoint change requires updating `openapi.yaml` first (enforced by PR review checklist)
 - Students learn to think about API design before writing implementation code
 - The spec serves as living documentation that never goes stale
+- Spec drift is caught by the `/compliance-check` Domain 10 (Documentation) gate, which verifies the spec exists, is parseable, and cross-references it against the running API's route list
+- The strict CSP (`default-src 'none'`) on the API blocks Swagger UI's inline scripts at `/docs` — documented as an accepted trade-off in ADR 0003; relax CSP for the `/docs` path in production if Swagger access is needed

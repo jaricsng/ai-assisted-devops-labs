@@ -1,7 +1,8 @@
 import structlog
 from fastapi import HTTPException, status
 
-from app.models.task import Task, TaskStatus, VALID_TRANSITIONS
+from app.business_metrics import task_status_transitions_total
+from app.models.task import VALID_TRANSITIONS, Task, TaskStatus
 from app.schemas.task import TaskUpdate
 
 logger = structlog.get_logger(__name__)
@@ -24,7 +25,7 @@ def validate_status_transition(current: TaskStatus, next_status: TaskStatus) -> 
             allowed=[s.value for s in allowed],
         )
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=(
                 f"Cannot transition task from '{current}' to '{next_status}'. "
                 f"Allowed transitions: {[s.value for s in allowed] or 'none (terminal state)'}."
@@ -48,6 +49,10 @@ def apply_task_update(task: Task, update: TaskUpdate) -> Task:
             old_status=old_status.value,
             new_status=task.status.value,
         )
+        task_status_transitions_total.labels(
+            from_status=old_status.value,
+            to_status=task.status.value,
+        ).inc()
 
     if update.title is not None:
         task.title = update.title

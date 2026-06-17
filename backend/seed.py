@@ -122,6 +122,7 @@ PROJECTS = [
 
 # ── Seed logic ────────────────────────────────────────────────────────────────
 
+
 async def seed() -> None:
     # Ensure tables exist (safe if they already do)
     async with engine.begin() as conn:
@@ -134,7 +135,9 @@ async def seed() -> None:
 
         if existing_user:
             print(f"Demo user '{DEMO_EMAIL}' already exists — skipping seed.")
-            print("To re-seed, reset the database first: docker compose down -v && docker compose up -d")
+            print(
+                "To re-seed, reset the database first: docker compose down -v && docker compose up -d"
+            )
             return
 
         # Create demo user
@@ -175,7 +178,9 @@ async def seed() -> None:
     print(f"  Password : {DEMO_PASSWORD}")
     print()
     print("  Projects created : 2")
-    print("  Tasks created    : 12  (spread across TODO / IN_PROGRESS / IN_REVIEW / DONE)")
+    print(
+        "  Tasks created    : 12  (spread across TODO / IN_PROGRESS / IN_REVIEW / DONE)"
+    )
     print()
     print("  Open the app at: http://localhost:5173")
 

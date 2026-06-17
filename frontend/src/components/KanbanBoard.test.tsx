@@ -30,4 +30,21 @@ describe("KanbanBoard", () => {
     render(<KanbanBoard tasks={[]} onStatusChange={vi.fn()} />);
     expect(screen.getAllByText("No tasks").length).toBeGreaterThan(0);
   });
+
+  it("places IN_REVIEW task in the IN_REVIEW column", () => {
+    const inReview: Task = { ...tasks[0], id: 4, status: "IN_REVIEW", title: "Task D" };
+    render(<KanbanBoard tasks={[inReview]} onStatusChange={vi.fn()} />);
+    expect(screen.getByTestId("column-IN_REVIEW")).toHaveTextContent("Task D");
+  });
+
+  it("places CANCELLED task in the CANCELLED column", () => {
+    const cancelled: Task = { ...tasks[0], id: 5, status: "CANCELLED", title: "Task E" };
+    render(<KanbanBoard tasks={[cancelled]} onStatusChange={vi.fn()} />);
+    expect(screen.getByTestId("column-CANCELLED")).toHaveTextContent("Task E");
+  });
+
+  it("renders all five column headers including Cancelled", () => {
+    render(<KanbanBoard tasks={[]} onStatusChange={vi.fn()} />);
+    expect(screen.getByText(/Cancelled/)).toBeInTheDocument();
+  });
 });

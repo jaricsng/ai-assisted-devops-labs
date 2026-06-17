@@ -14,6 +14,21 @@ jobs:
       run:
         working-directory: backend
 
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: taskuser
+          POSTGRES_PASSWORD: taskpass
+          POSTGRES_DB: taskmanager
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - uses: actions/checkout@v4
 
@@ -21,9 +36,11 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: backend/pyproject.toml
 
       - name: Install dependencies
-        run: pip install -e ".[dev]" aiosqlite
+        run: pip install -e ".[dev]"
 
       - name: Check formatting (black)
         run: black --check .
@@ -37,10 +54,20 @@ jobs:
       - name: Run tests with coverage
         run: pytest --cov=app --cov-report=xml --cov-fail-under=70
         env:
-          DATABASE_URL: sqlite+aiosqlite:///:memory:
-          SECRET_KEY: ci-test-secret-key
+          DATABASE_URL: postgresql+asyncpg://taskuser:taskpass@localhost:5432/taskmanager
+          SECRET_KEY: ci-test-secret-key-32-chars-here
           ENVIRONMENT: test
           OTEL_ENABLED: "false"
+
+      - name: Coverage PR comment
+        uses: MishaKav/pytest-coverage-comment@v1.7.2
+        if: github.event_name == 'pull_request'
+        with:
+          pytest-coverage-path: backend/coverage.xml
+          title: Backend Coverage Report
+          badge-title: Backend Coverage
+          default-branch: main
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload coverage report
         uses: actions/upload-artifact@v4
@@ -98,15 +125,13 @@ jobs:
           python-version: "3.12"
 
       - name: Install backend dev dependencies
-        run: pip install -e ".[dev]" aiosqlite
+        run: pip install -e ".[dev]"
         working-directory: backend
 
       - name: SAST — bandit (Python)
-        # -ll = medium-and-above; exit non-zero on any finding
-        run: bandit -r app/ -c pyproject.toml -ll --exit-zero
+        # -ll = medium-and-above severity; exits non-zero on any finding
+        run: bandit -r app/ -c pyproject.toml -ll
         working-directory: backend
-        # --exit-zero: report findings but don't fail the build yet (informational)
-        # Remove --exit-zero once the team has triaged the initial findings
 
       - name: Dependency CVEs — pip-audit (Python)
         run: pip-audit --desc --format columns
@@ -142,16 +167,52 @@ jobs:
   docker-build:
     name: Docker Compose build
     runs-on: ubuntu-latest
+    needs: [backend, frontend]   # only build images after tests pass — fail fast
     steps:
       - uses: actions/checkout@v4
       - name: Build all images
         run: docker compose build
+
+  smoke-test:
+    name: k6 smoke test
+    runs-on: ubuntu-latest
+    needs: [docker-build]
+    # Smoke test only on PRs to main — verifies the full user journey before merge
+    if: github.event_name == 'pull_request' && github.base_ref == 'main'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start full stack
+        run: docker compose up -d
+        env:
+          SECRET_KEY: ci-smoke-test-secret-key
+
+      - name: Wait for API to be healthy
+        run: |
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:8000/health && echo "API ready" && exit 0
+            echo "Waiting for API (attempt $i)…"
+            sleep 3
+          done
+          echo "❌ API did not start in time" && exit 1
+
+      - name: Run k6 smoke test
+        run: |
+          docker run --rm --network host \
+            -v "${{ github.workspace }}/load-tests/k6:/scripts" \
+            grafana/k6 run /scripts/smoke.js
+
+      - name: Tear down stack
+        if: always()
+        run: docker compose down
 
   e2e:
     name: E2E tests (Playwright)
     runs-on: ubuntu-latest
     # E2E only runs on PRs to main to keep push pipelines fast
     if: github.event_name == 'pull_request' && github.base_ref == 'main'
+    needs: [smoke-test]   # only run full E2E if smoke test passed
     defaults:
       run:
         working-directory: frontend
@@ -172,16 +233,29 @@ jobs:
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
 
-      - name: Start backend stack
-        run: docker compose up api db -d
-        working-directory: .
+      - name: Start full stack
+        run: docker compose up -d
+        working-directory: ${{ github.workspace }}
+        env:
+          SECRET_KEY: ci-e2e-test-secret-key
 
-      - name: Wait for API health check
+      - name: Wait for API to be healthy
         run: |
           for i in $(seq 1 30); do
-            curl -sf http://localhost:8000/health && break
-            sleep 2
+            curl -sf http://localhost:8000/health && echo "API ready" && exit 0
+            echo "Waiting for API (attempt $i)…"
+            sleep 3
           done
+          echo "❌ API did not start in time" && exit 1
+
+      - name: Wait for frontend to be ready
+        run: |
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:5173 && echo "Frontend ready" && exit 0
+            echo "Waiting for frontend (attempt $i)…"
+            sleep 3
+          done
+          echo "❌ Frontend did not start in time" && exit 1
 
       - name: Run E2E tests
         run: npm run e2e
@@ -195,3 +269,66 @@ jobs:
           name: playwright-report
           path: frontend/playwright-report/
           retention-days: 7
+
+  terraform-plan:
+    name: Terraform plan + tfsec (staging)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write    # to post the plan output as a PR comment
+    # Only run on PRs; tfsec runs for all PRs (no cloud credentials needed),
+    # terraform plan requires GCP Workload Identity and GCS state bucket.
+    if: github.event_name == 'pull_request'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9"
+
+      - name: tfsec IaC security scan
+        # Static analysis of all Terraform HCL — no cloud credentials required.
+        # soft_fail: true means findings are reported but do not fail the build.
+        # Set soft_fail: false to hard-gate on HIGH+ findings.
+        uses: aquasecurity/tfsec-action@v1.0.0
+        with:
+          working_directory: solution/infra/terraform
+          soft_fail: true
+
+      - name: Authenticate to GCP (Workload Identity — keyless)
+        # Requires GCP_WORKLOAD_IDENTITY_PROVIDER and GCP_SERVICE_ACCOUNT secrets.
+        # See docs/modules/17-infrastructure-as-code.md for setup instructions.
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+        continue-on-error: true   # allow tfsec results to be posted even without GCP setup
+
+      - name: Terraform init
+        run: terraform init
+        working-directory: solution/infra/terraform/environments/staging
+        continue-on-error: true   # non-blocking until GCP is configured
+
+      - name: Terraform plan
+        id: plan
+        run: |
+          terraform plan -no-color \
+            -var="image_tag=sha-${{ github.sha }}" \
+            -var="secret_key=placeholder"
+        working-directory: solution/infra/terraform/environments/staging
+        continue-on-error: true   # plan output is informational on PRs
+
+      - name: Post plan as PR comment
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const planOutput = `${{ steps.plan.outputs.stdout }}` || '(plan step skipped — GCP credentials not configured)';
+            const output = `#### Terraform Plan — Staging\n\`\`\`\n${planOutput}\n\`\`\`\n*See [Module 17](docs/modules/17-infrastructure-as-code.md) to configure GCP Workload Identity.*`;
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            });

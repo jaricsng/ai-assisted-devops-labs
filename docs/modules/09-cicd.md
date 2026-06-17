@@ -21,20 +21,18 @@ Automated quality gates → enforced on every commit, forever.
 
 ## The Pipeline
 
-Open `.github/workflows/ci.yml`. It has **four jobs** that run in parallel on every push and PR:
+Open `.github/workflows/ci.yml`. It has **five jobs** that run in parallel on every push and PR:
 
-```
-push / PR
-  ├── backend   → black, isort, ruff, pytest (≥70% coverage)
-  ├── frontend  → tsc --noEmit, eslint, vitest (≥70% coverage)
-  ├── security  → bandit SAST, pip-audit CVEs, npm audit CVEs, secret grep
-  └── docker-build → docker compose build (smoke test)
-
-PR to main only:
-  └── e2e       → Playwright full browser tests
+```mermaid
+flowchart LR
+    push["push / PR"] --> B["backend\nblack · isort · ruff\npytest ≥70%"]
+    push --> F["frontend\ntsc · eslint\nvitest ≥70%"]
+    push --> S["security\nbandit · pip-audit\nnpm audit · secret grep"]
+    push --> D["docker-build\ndocker compose build"]
+    pr["PR to main\n(additionally)"] --> E["e2e\nPlaywright\nfull browser tests"]
 ```
 
-All four must pass before a PR can merge to `main` (branch protection enforces this).
+All five must pass before a PR can merge to `main` (branch protection enforces this).
 
 ## The Security Job
 
@@ -47,7 +45,7 @@ The `security` job runs on every push — this is **shift-left security in CI**.
 | JS CVEs | `npm audit --audit-level=high` | High/critical vulnerabilities in npm packages |
 | Secret scan | `grep` on tracked files | AWS keys, GitHub tokens, OpenAI keys matching known patterns |
 
-The bandit step uses `--exit-zero` initially — it reports findings but doesn't fail the build. Once your team has triaged the baseline findings, remove `--exit-zero` to make it a hard gate.
+The bandit step exits non-zero on any medium-or-above severity finding — it is a **hard gate**. If bandit finds an issue, the security job fails and the PR cannot merge. Fix the code or suppress with `# nosec B<number>` and a justification comment.
 
 ## Activities
 
@@ -71,7 +69,7 @@ Ask Claude Code:
 
 ### 2. Understand the bandit findings
 
-The `security` job runs `bandit --exit-zero`, so it always passes but still reports findings. Read the output:
+The `security` job runs `bandit -ll` (medium-and-above severity), which **fails the build** if any findings are present. Read the output locally:
 
 ```bash
 # Run bandit locally to see the same output:
@@ -87,7 +85,10 @@ For each finding, bandit shows:
 Ask Claude Code about any finding:
 > "Explain the bandit finding B105 at app/config.py:13. What's the attack vector and how should I fix it?"
 
-When you're satisfied the findings are understood and either fixed or accepted, remove `--exit-zero` from the bandit step in `ci.yml` to make it a hard gate.
+For each finding, either fix the code or add a targeted suppression with justification:
+```python
+subprocess.run(cmd)  # nosec B603 — cmd is constructed from internal config, never user input
+```
 
 ### 3. Make CI fail intentionally — then fix it
 
@@ -131,22 +132,40 @@ Ask Claude Code:
 
 Apply the change and push. Open a PR — the coverage report should appear as a comment.
 
-### 5. Harden the bandit gate
+> **Reference implementation:** `MishaKav/pytest-coverage-comment@v1.10.0` is already wired into the backend job in `.github/workflows/ci.yml` (pinned to a release tag, not `@main`, to reduce supply-chain risk).
 
-When you're ready to make bandit a hard failure (not just informational):
+### 5. Review and accept or fix bandit findings
 
-1. Remove `--exit-zero` from the bandit step in `.github/workflows/ci.yml`
-2. Run bandit locally to see all current findings: `cd backend && bandit -r app/ -c pyproject.toml -ll`
-3. For each finding, either fix the code or add a `# nosec B<number>` comment with a justification:
+Bandit is already a hard gate in this project (`--exit-zero` was removed). Your activity:
+
+1. Run bandit locally: `cd backend && bandit -r app/ -c pyproject.toml -ll`
+2. For each finding, decide: fix the code or suppress with justification:
    ```python
-   subprocess.run(cmd)  # nosec B603 — cmd is fully controlled by internal code, never user input
+   subprocess.run(cmd)  # nosec B603 — cmd is constructed from internal config, never user input
    ```
-4. Push and verify the security job passes with the hard gate
+3. Push and verify the security job passes
 
 Ask Claude Code:
 > "What's the risk of using `# nosec` to suppress a bandit finding? When is it appropriate and when is it a code smell?"
 
-### 6. Set up branch protection
+### 6. Review a Dependabot PR
+
+The `.github/dependabot.yml` file is already configured to open weekly PRs for pip, npm, and GitHub Actions dependency updates. Dependabot is automated dependency hygiene — one of the cheapest security wins available.
+
+When a Dependabot PR arrives:
+1. Read the PR description — Dependabot links to the changelog or release notes
+2. Check whether the update is a patch, minor, or major version bump
+3. Look at the CI results — all jobs must pass before merging
+4. For major version bumps, read the migration guide before approving
+5. Merge the PR — or leave a comment explaining why you're deferring
+
+Ask Claude Code:
+> "A Dependabot PR bumped fastapi from 0.115 to 0.137. What changed between these versions that could affect this project? Check the changelog and identify any breaking changes."
+
+> **Note:** Dependabot PRs appear on GitHub under the **Pull requests** tab. You don't need to do anything to enable them — the config file is already in the repo.
+
+### 7. Set up branch protection
+
 
 In your GitHub repo settings:
 1. Go to **Settings → Branches → Add branch protection rule**
@@ -180,54 +199,130 @@ This is shift-left security: **catching security issues at merge time rather tha
 
 ## Checkpoint
 
-- [ ] All five CI jobs run on every push (check Actions tab)
-- [ ] The `security` job reports bandit findings (check the Actions log)
-- [ ] You've intentionally broken coverage CI and then fixed it
-- [ ] You've seen the secret scan detect a pattern and understood why
+- [ ] All six CI jobs visible in the Actions tab (`backend`, `frontend`, `security`, `docker-build`, `smoke-test`, `e2e`)
+- [ ] The `security` job passes — bandit is a hard gate (no `--exit-zero`)
+- [ ] You've intentionally broken coverage CI and then fixed it (Activity 3)
+- [ ] You've seen the secret scan detect a pattern and understood why (Activity 3)
 - [ ] Coverage summary comment appears on PRs (Activity 4)
-- [ ] Branch protection requires all jobs on `main`
-- [ ] Dependency caching added — second run is visibly faster (Activity 7)
-- [ ] `docker-build` has `needs: [backend, frontend]` (Activity 8)
-- [ ] k6 smoke test runs on PRs to `main` (Activity 9)
-- [ ] Commit: `ci: add caching, job ordering, and k6 smoke test`
+- [ ] Bandit findings investigated — each either fixed or suppressed with `# nosec` + justification (Activity 5)
+- [ ] Dependabot PRs reviewed and merged (Activity 6)
+- [ ] Branch protection requires `backend`, `frontend`, `security`, `docker-build` on `main`
+- [ ] Second CI run on same code is visibly faster due to pip + npm caching (Activity 8)
+- [ ] Pushing a failing test shows `docker-build` and `smoke-test` as **Skipped**, not Failed (Activity 9)
+- [ ] k6 smoke test passes on PRs to `main`; Playwright E2E only runs if smoke test passes (Activity 10)
+- [ ] `CHANGELOG.md` created with `[Unreleased]` and `[0.1.0]` sections using Keep a Changelog format (Activity 11)
+- [ ] `.github/workflows/drift-detection.yml` created — runs nightly to detect image/version drift and OpenAPI schema drift
+- [ ] Commit: `ci: verify caching, job ordering, k6 smoke test, and CHANGELOG`
 
-### 7. Speed up CI with dependency caching
+> **Reference implementations:** See `.github/workflows/drift-detection.yml` (nightly drift check with Slack alert) and the `slsa-provenance` + `notify-failure` jobs in `.github/workflows/publish.yml`.
 
-Without caching, every CI run reinstalls all packages from scratch — adding 60–90 seconds to every pipeline run. GitHub Actions can cache the pip and npm caches between runs.
+### 8. Understand dependency caching
 
-The `frontend` job already uses `cache: "npm"` on `actions/setup-node`. Add caching to the `backend` job:
+Without caching, every CI run reinstalls all packages from scratch — adding 60–90 seconds to every pipeline run. Open `ci.yml` and find the `backend` job:
 
-Ask Claude Code:
-> "Add pip dependency caching to the `backend` job in `.github/workflows/ci.yml` using `actions/setup-python@v5`'s built-in cache support. Show the updated step."
-
-The `pip-cache-dir` is derived from the `pyproject.toml` hash — when dependencies change, the cache is invalidated automatically.
-
-After adding caching, push a branch twice and compare the run times in the Actions tab. The second run should be 60+ seconds faster.
-
-### 8. Add job dependency ordering with `needs:`
-
-The `docker-build` job verifies the image builds, but currently runs in parallel with the backend and frontend jobs. It's more useful to only run the Docker build after the tests pass — fail fast on test failures before spending time building images.
-
-Ask Claude Code:
-> "Add a `needs: [backend, frontend]` dependency to the `docker-build` job in `.github/workflows/ci.yml` so it only runs after both jobs pass. Show the complete updated job definition."
-
-After the change, push a failing test — the Docker build job will now be skipped (shown as greyed out in the Actions UI) because the `backend` job failed. This is clearer than showing it as failed.
-
-### 9. Add the k6 smoke test to CI
-
-A passing smoke test is a fast, meaningful signal that the deployed API handles real requests — not just that it started. Add a `smoke-test` job that runs after `docker-build`:
-
-Ask Claude Code:
-> "Add a `smoke-test` job to `.github/workflows/ci.yml` that: (1) starts the Docker Compose stack, (2) waits for the health check, (3) runs `k6 run load-tests/k6/smoke.js` using the Docker k6 image, (4) only runs on PRs to `main`. Use `needs: [docker-build]`."
-
-The Docker k6 command (no local install needed):
-```bash
-docker run --rm --network host -v $(pwd)/load-tests/k6:/scripts grafana/k6 run /scripts/smoke.js
+```yaml
+- name: Set up Python 3.12
+  uses: actions/setup-python@v5
+  with:
+    python-version: "3.12"
+    cache: "pip"
+    cache-dependency-path: backend/pyproject.toml
 ```
 
-This means any PR that breaks the full user journey (register → login → create project → create task) is caught before merging.
+The `cache: "pip"` option uses GitHub's built-in pip cache, keyed to the `pyproject.toml` hash — when dependencies change, the cache is invalidated automatically. The `frontend` job uses `cache: "npm"` on `setup-node` for the same reason.
 
-### 10. Pipeline failure notifications
+Ask Claude Code:
+> "Explain how `cache-dependency-path` works in `actions/setup-python`. What happens to the cache when I add a new package to `pyproject.toml`? What happens when I only change application code?"
+
+Push a branch twice and compare the run times in the Actions tab. The second run should be 60+ seconds faster on the `backend` job.
+
+### 9. Understand job dependency ordering with `needs:`
+
+Open `ci.yml` and find the `docker-build` job:
+
+```yaml
+docker-build:
+  name: Docker Compose build
+  needs: [backend, frontend]   # only build images after tests pass — fail fast
+```
+
+The `needs:` key means `docker-build` is skipped entirely if `backend` or `frontend` fails. To verify:
+
+1. Add a deliberate test failure to `backend/app/services/task_service.py`
+2. Push the branch
+3. Watch the Actions tab — `docker-build` shows as **Skipped** (grey), not **Failed** (red)
+
+This is more informative than seeing it fail: grey means "we didn't reach this step because an earlier gate blocked it."
+
+Ask Claude Code:
+> "In GitHub Actions, what is the difference between a job that is `skipped` and one that `failed`? Can a downstream job with `if: always()` still run if an upstream job was skipped?"
+
+### 10. Understand the k6 smoke test job
+
+Open `ci.yml` and find the `smoke-test` job. It runs after `docker-build` on PRs to `main`:
+
+```yaml
+smoke-test:
+  name: k6 smoke test
+  needs: [docker-build]
+  if: github.event_name == 'pull_request' && github.base_ref == 'main'
+```
+
+The smoke test starts the full Docker Compose stack and runs `load-tests/k6/smoke.js` using the k6 Docker image — no local k6 install required:
+
+```bash
+docker run --rm --network host \
+  -v "${{ github.workspace }}/load-tests/k6:/scripts" \
+  grafana/k6 run /scripts/smoke.js
+```
+
+The `e2e` job depends on `smoke-test` — Playwright only runs if k6 confirms the API is actually handling real requests correctly.
+
+Ask Claude Code:
+> "What is the difference between the k6 smoke test and the Playwright E2E tests in this pipeline? When would one pass but the other fail? Why run k6 first?"
+
+This means any PR that breaks the full user journey (register → login → create project → create task) is caught before the slower Playwright suite even starts.
+
+### 11. Create and maintain a CHANGELOG
+
+A CHANGELOG is not just for users — it forces engineers to articulate *what changed and why* in each release, which is invaluable during incident investigation. The [Keep a Changelog](https://keepachangelog.com/) format is the industry standard.
+
+Create `CHANGELOG.md` at the project root using the `[Unreleased]` → version pattern:
+
+```markdown
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+## [0.1.0] — 2026-06-15
+
+### Added
+- Three-tier Task Manager application: FastAPI API, React frontend, PostgreSQL database
+- JWT authentication with JTI revocation on logout
+- Task status state machine: TODO → IN_PROGRESS → IN_REVIEW → DONE
+- Seven HTTP security headers via SecurityHeadersMiddleware
+- Structured audit logging on all write operations
+- GDPR soft delete via `DELETE /auth/users/me`
+- OpenTelemetry tracing → Jaeger; Prometheus metrics → Grafana
+- E2E Playwright tests for critical user journeys
+- OWASP pen test suite (22 checks)
+- Docker Compose stack with observability profile
+
+[Unreleased]: https://github.com/YOUR_USERNAME/task-manager/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/YOUR_USERNAME/task-manager/releases/tag/v0.1.0
+```
+
+**The release workflow**: every time you complete a module milestone and bump the version in `backend/pyproject.toml`, add a new dated version block to `CHANGELOG.md` moving items from `[Unreleased]`.
+
+Ask Claude Code:
+> "Read the git log since the project started (`git log --oneline`). Based on the commit messages, generate a CHANGELOG.md entry for version 0.1.0 using the Keep a Changelog format. Group commits by: Added, Changed, Fixed, Security."
+
+### 12. Pipeline failure notifications
 
 By default, GitHub notifies the PR author when CI fails. For team-wide visibility, add a Slack or email notification on `main` branch failures:
 

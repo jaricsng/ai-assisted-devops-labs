@@ -6,6 +6,8 @@
 - Use Conventional Commits for a readable git log
 - Configure pre-commit hooks so bad code and secrets never reach the repo
 - Understand shift-left security: catching issues at commit time, not after merge
+- Configure `.editorconfig` so every contributor produces consistent file formatting regardless of editor
+- Create a `CODEOWNERS` file so security-sensitive paths get automatic reviewers on every PR
 
 ## Activities
 
@@ -99,14 +101,93 @@ git commit -m "test: pre-commit hooks verified"
 git revert HEAD --no-edit  # clean up
 ```
 
-### 6. Configure a Claude Code hook (optional but instructive)
+### 6. Add an `.editorconfig` file
+
+Without `.editorconfig`, every developer's editor applies different defaults: some use tabs, some spaces; some trim trailing whitespace, others don't. This causes noisy diffs and pre-commit failures on other people's machines.
+
+Create `.editorconfig` at the project root:
+
+```ini
+root = true
+
+[*]
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+charset = utf-8
+
+[*.py]
+indent_style = space
+indent_size = 4
+max_line_length = 88
+
+[*.{ts,tsx,js,jsx}]
+indent_style = space
+indent_size = 2
+max_line_length = 100
+
+[*.{json,yaml,yml,toml}]
+indent_style = space
+indent_size = 2
+
+[*.md]
+trim_trailing_whitespace = false
+```
+
+Most editors (VS Code, JetBrains, vim) respect `.editorconfig` automatically, either natively or via the [EditorConfig plugin](https://editorconfig.org/).
+
+Ask Claude Code:
+> "My `.editorconfig` sets `indent_size = 4` for Python and `indent_size = 2` for TypeScript. Are there any files in this project where the current indentation doesn't match these settings? Check `backend/app/main.py` and `frontend/src/App.tsx` as samples."
+
+### 7. Create a `CODEOWNERS` file
+
+`CODEOWNERS` automatically adds reviewers when specific files are changed in a PR. This is essential for security-sensitive paths — you don't want someone to modify `middleware/security_headers.py` without a security-aware review.
+
+Create `.github/CODEOWNERS`:
+
+```
+# Global owner — reviews any file not matched below
+*                                       @YOUR_GITHUB_USERNAME
+
+# Security-sensitive: auth middleware, JWT validation, route guards
+backend/app/middleware/               @YOUR_GITHUB_USERNAME
+backend/app/routers/auth.py           @YOUR_GITHUB_USERNAME
+backend/app/services/auth_service.py  @YOUR_GITHUB_USERNAME
+backend/app/routers/deps.py           @YOUR_GITHUB_USERNAME
+
+# Database migrations: irreversible in production without careful review
+backend/alembic/                      @YOUR_GITHUB_USERNAME
+
+# CI/CD pipelines: can execute arbitrary code in the GitHub environment
+.github/workflows/                    @YOUR_GITHUB_USERNAME
+
+# Cloud deployment manifests
+aws/                                  @YOUR_GITHUB_USERNAME
+infra/gcp/                            @YOUR_GITHUB_USERNAME
+aspire/                               @YOUR_GITHUB_USERNAME
+fly.toml                              @YOUR_GITHUB_USERNAME
+azure.yaml                            @YOUR_GITHUB_USERNAME
+
+# Security policy and pen test scripts
+SECURITY.md                           @YOUR_GITHUB_USERNAME
+pen-tests/                            @YOUR_GITHUB_USERNAME
+```
+
+Replace `@YOUR_GITHUB_USERNAME` with your GitHub handle.
+
+For CODEOWNERS enforcement to work, branch protection must require a review from code owners (Settings → Branches → your `main` rule → enable "Require review from Code Owners").
+
+Ask Claude Code:
+> "Review `.github/CODEOWNERS`. Are there any security-sensitive paths in `backend/app/` that I've missed? What about the observability config — should changes to Grafana alert rules also require a code owner review?"
+
+### 8. Configure a Claude Code hook (optional but instructive)
 
 Ask Claude Code to add a hook that runs `black` automatically after it writes Python files:
 > "Configure a PostToolUse hook in Claude Code settings that runs black on any Python file I write or edit."
 
 Or use `/update-config` and describe what you want.
 
-### 7. Write your first feature commit
+### 9. Write your first feature commit
 
 Create a feature branch:
 ```bash
@@ -145,8 +226,10 @@ Open a pull request from `feature/add-task-filtering` → `develop`.
 
 - [ ] `pre-commit run --all-files` exits clean
 - [ ] `.secrets.baseline` is committed
+- [ ] `.editorconfig` committed with Python indent=4 and TypeScript indent=2 settings
+- [ ] `.github/CODEOWNERS` committed with your GitHub username as owner of `backend/app/middleware/`, `backend/app/routers/auth.py`, `backend/alembic/`, and `.github/workflows/`
 - [ ] `git log --oneline` shows at least 2 Conventional Commits
 - [ ] You have a `develop` branch and at least one `feature/*` branch
 - [ ] You've opened a PR using the PR template (all checkboxes visible)
 - [ ] A direct commit to `main` was blocked by the `no-commit-to-branch` hook (try it)
-- [ ] Commit: `chore: configure pre-commit hooks with security scanning`
+- [ ] Commit: `chore: configure pre-commit hooks, editorconfig, and CODEOWNERS`

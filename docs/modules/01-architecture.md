@@ -41,11 +41,20 @@ Pick a technology decision you'd make for this project (e.g., "Why Tanstack Quer
 Ask Claude Code to review it:
 > "Review my ADR at docs/adr/0003-xyz.md. Is the rationale convincing? What have I missed?"
 
+---
+
+> **Security at design time.** Before writing code, note at least one security assumption in
+> your ADR: who can call which endpoints, what data is sensitive, and what the failure mode is
+> if the authentication layer is bypassed. You will build the full STRIDE threat model in
+> Module 19 — but threat thinking starts here, not at the end. Ask Claude Code:
+> "What are the top 3 security risks in the architecture I've just designed?"
+
 ## Checkpoint
 
 - [ ] You can explain the three tiers and their responsibilities without looking at the code
 - [ ] The Mermaid diagram is in the architecture ADR
 - [ ] You've written a new ADR (`docs/adr/0003-*.md`) and committed it
+- [ ] Your ADR includes at least one security assumption or constraint (e.g., "all write endpoints require JWT; unauthenticated reads are not supported")
 
 ## Key Takeaway
 

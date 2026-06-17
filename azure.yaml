@@ -1,0 +1,55 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/azure-dev/main/schemas/v1.0/azure.yaml.json
+
+name: task-manager
+metadata:
+  template: task-manager@0.0.1
+
+# Aspire AppHost is the single deployment entry point for azd.
+#
+# `azd provision` — reads the Aspire manifest, provisions Azure infrastructure:
+#   - Azure Container Apps Environment
+#   - Azure Container Registry (ACR) — images built and pushed here by azd
+#   - Azure Database for PostgreSQL Flexible Server
+#   - Azure Key Vault — secrets injected at runtime, never in config files
+#
+# `azd deploy` — builds Docker images from source, pushes to ACR, updates
+#   Container App revisions. Services are defined in Program.cs.
+#
+# `azd up` — runs provision + deploy in sequence (use for first-time setup)
+#
+# See docs/modules/13-continuous-deployment.md for the GitHub Actions pipeline.
+services:
+  app:
+    language: dotnet
+    project: aspire/TaskManager.AppHost/TaskManager.AppHost.csproj
+    host: containerapp
+
+# Pipeline configuration — `azd pipeline config` writes these GitHub secrets:
+#   AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID, AZURE_ENV_NAME
+# And these GitHub variables:
+#   AZURE_LOCATION, AZURE_ENV_NAME
+pipeline:
+  provider: github
+
+# Post-deploy hooks run after `azd deploy` completes.
+# Used here to run Alembic database migrations inside the deployed API container.
+#
+# Note: Azure Container Apps does not have a native `release_command` equivalent.
+# The recommended pattern is a Container App Job. For simplicity this hook uses
+# `az containerapp exec` — replace with a Container App Job in production for
+# better isolation and retry handling.
+hooks:
+  postdeploy:
+    posix:
+      shell: sh
+      run: |
+        RESOURCE_GROUP=$(azd env get-value AZURE_RESOURCE_GROUP 2>/dev/null || echo "")
+        ENV_NAME=$(azd env get-name)
+        if [ -n "$RESOURCE_GROUP" ]; then
+          echo "→ Running Alembic migrations in ${ENV_NAME}-api ..."
+          az containerapp exec \
+            --name "${ENV_NAME}-api" \
+            --resource-group "$RESOURCE_GROUP" \
+            --command "alembic upgrade head" || true
+          echo "✅ Migration step complete (see container logs for details)"
+        fi

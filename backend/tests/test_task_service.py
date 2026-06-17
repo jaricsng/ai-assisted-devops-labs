@@ -1,10 +1,11 @@
 """Unit tests for task_service — no database required."""
+
 import pytest
 from fastapi import HTTPException
 
-from app.models.task import Task, TaskStatus, TaskPriority
+from app.models.task import Task, TaskPriority, TaskStatus
 from app.schemas.task import TaskUpdate
-from app.services.task_service import validate_status_transition, apply_task_update
+from app.services.task_service import apply_task_update, validate_status_transition
 
 
 def make_task(**kwargs) -> Task:
@@ -75,3 +76,15 @@ class TestApplyTaskUpdate:
         result = apply_task_update(task, TaskUpdate())
         assert result.title == "Original"
         assert result.priority == TaskPriority.HIGH
+
+    def test_updates_assignee_id(self):
+        task = make_task(assignee_id=None)
+        result = apply_task_update(task, TaskUpdate(assignee_id=42))
+        assert result.assignee_id == 42
+
+    def test_updates_due_date(self):
+        from datetime import date
+
+        task = make_task(due_date=None)
+        result = apply_task_update(task, TaskUpdate(due_date=date(2026, 12, 31)))
+        assert result.due_date == date(2026, 12, 31)
