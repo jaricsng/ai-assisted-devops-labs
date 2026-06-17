@@ -341,6 +341,21 @@ See [docs/operations.md](docs/operations.md) for the full operations reference: 
 
 ---
 
+## Releases
+
+This project uses tagged releases. To check out a specific release:
+
+```bash
+git fetch --tags
+git checkout v1.0.0              # detached HEAD at that release
+# or, to keep working from it:
+git checkout -b release/v1.0.0 v1.0.0
+```
+
+List all available tags: `git tag -l -n`. See [CHANGELOG.md](CHANGELOG.md) for what changed in each release.
+
+---
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for branch strategy, commit conventions, pre-commit hook setup, and the PR process (including the security checklist).
