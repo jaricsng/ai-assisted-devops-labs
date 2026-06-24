@@ -99,7 +99,7 @@ jobs:
           output-file: sbom-api.json
 
       - name: Upload SBOM as build artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sbom-api-${{ github.sha }}
           path: sbom-api.json
@@ -172,7 +172,7 @@ jobs:
           output-file: sbom-frontend.json
 
       - name: Upload SBOM as build artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sbom-frontend-${{ github.sha }}
           path: sbom-frontend.json
@@ -212,7 +212,7 @@ jobs:
                --output-path aspire-manifest.json
 
       - name: Upload manifest as build artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: aspire-manifest-${{ github.sha }}
           path: aspire-manifest.json
