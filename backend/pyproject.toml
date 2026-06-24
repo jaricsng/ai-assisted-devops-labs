@@ -38,7 +38,7 @@ dev = [
     "isort>=5.13",
     "ruff>=0.6",
     # Security scanning — used by /security-scan, /check-dependencies, CI security job
-    "bandit[toml]>=1.7",
+    "bandit[toml]>=1.9.4",
     "pip-audit>=2.7",
 ]
 
