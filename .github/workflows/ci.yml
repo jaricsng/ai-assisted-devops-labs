@@ -291,7 +291,7 @@ jobs:
         # Static analysis of all Terraform HCL — no cloud credentials required.
         # soft_fail: true means findings are reported but do not fail the build.
         # Set soft_fail: false to hard-gate on HIGH+ findings.
-        uses: aquasecurity/tfsec-action@v1.0.0
+        uses: aquasecurity/tfsec-action@v1.0.3
         with:
           working_directory: solution/infra/terraform
           soft_fail: true
